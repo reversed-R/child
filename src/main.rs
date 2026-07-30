@@ -91,7 +91,12 @@ fn main() {
 
     for (bin, path) in obj_bins {
         let elf = Elf64Parser::new(&bin, path).unwrap();
+
         println!("{elf:#?}");
+        println!("-- .symtab --");
+        println!("{:#?}", elf.section_symtab());
+        println!("-- .rela.text --");
+        println!("{:#?}", elf.section_rela_text());
     }
 }
 

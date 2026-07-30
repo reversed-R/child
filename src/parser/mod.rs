@@ -1,16 +1,24 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::elf::elf64::{
     EI_CLASS, EI_DATA, EI_MAG0, EI_MAG3, EI_VERSION, ELFCLASS64, ELFDATA2LSB, ELFMAG, EM_X86_64,
-    EV_CURRENT, Elf64_Ehdr, Elf64_Shdr,
+    EV_CURRENT, Elf64_Ehdr, Elf64_Shdr, Elf64_Word,
 };
+
+mod section;
 
 #[derive(Debug)]
 pub(crate) struct Elf64Parser<'a> {
     bin: &'a [u8],
     path: PathBuf,
     hdr: Elf64_Ehdr,
-    shdrs: HashMap<String, Elf64_Shdr>,
+    shdrs: Vec<ElfSectionHeaderEntry>,
+}
+
+#[derive(Debug)]
+struct ElfSectionHeaderEntry {
+    name: String,
+    hdr: Elf64_Shdr,
 }
 
 #[derive(Debug)]
@@ -23,6 +31,7 @@ pub(crate) enum ElfParseError {
     InvalidEndian,
     InvalidVersion,
     InvalidMachine,
+    SectionNotFound { name: String },
 }
 
 impl<'a> Elf64Parser<'a> {
@@ -91,7 +100,10 @@ impl<'a> Elf64Parser<'a> {
                             let sh_name =
                                 String::from_utf8(shstrtab[shdr.sh_name as usize..i].to_vec())
                                     .expect("invalid utf8");
-                            return Ok((sh_name, shdr));
+                            return Ok(ElfSectionHeaderEntry {
+                                name: sh_name,
+                                hdr: shdr,
+                            });
                         }
                     }
 
@@ -108,16 +120,23 @@ impl<'a> Elf64Parser<'a> {
         })
     }
 
-    fn section(&'a self, name: &str) -> Option<Result<(&'a Elf64_Shdr, &'a [u8]), ElfParseError>> {
-        self.shdrs.get(name).map(|shdr| {
-            if self.bin.len() < (shdr.sh_offset + shdr.sh_size) as usize {
-                Err(ElfParseError::TooShort)
-            } else {
-                Ok((
-                    shdr,
-                    &self.bin[shdr.sh_offset as usize..(shdr.sh_offset + shdr.sh_size) as usize],
-                ))
-            }
-        })
+    fn get_section_by_type(
+        &'a self,
+        typ: Elf64_Word,
+    ) -> Option<Result<(&'a Elf64_Shdr, &'a [u8]), ElfParseError>> {
+        self.shdrs
+            .iter()
+            .find(|shdr| shdr.hdr.sh_type == typ)
+            .map(|shdr| {
+                if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
+                    Err(ElfParseError::TooShort)
+                } else {
+                    Ok((
+                        &shdr.hdr,
+                        &self.bin[shdr.hdr.sh_offset as usize
+                            ..(shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize],
+                    ))
+                }
+            })
     }
 }
