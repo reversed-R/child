@@ -1,17 +1,19 @@
 use crate::{
     elf::elf64::Elf64_Sym,
+    linker::ResolvedSym,
     parser::{Elf64Parser, ElfParseError, section::strtab::ElfSectionStrtab},
 };
 
 #[derive(Debug)]
 pub(crate) struct ElfSectionSymtab {
-    syms: Vec<ElfSym>,
+    pub(crate) syms: Vec<ElfSym>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ElfSym {
     pub(crate) name: String,
     pub(crate) sym: Elf64_Sym,
+    pub(crate) resolved_sym: Option<ResolvedSym>,
 }
 
 impl<'a> Elf64Parser<'a> {
@@ -20,10 +22,10 @@ impl<'a> Elf64Parser<'a> {
         strtab: &ElfSectionStrtab,
     ) -> Result<ElfSectionSymtab, ElfParseError> {
         let (_, bin) =
-            self.get_section_by_name(".symtab")
+            self.get_section_by_name(".symtab")?
                 .ok_or(ElfParseError::SectionNotFound {
                     name: ".symtab".into(),
-                })??;
+                })?;
 
         Ok(ElfSectionSymtab {
             syms: (0..bin.len() / std::mem::size_of::<Elf64_Sym>())
@@ -38,6 +40,7 @@ impl<'a> Elf64Parser<'a> {
                     ElfSym {
                         sym,
                         name: strtab.get(sym.st_name as usize),
+                        resolved_sym: None,
                     }
                 })
                 .collect(),

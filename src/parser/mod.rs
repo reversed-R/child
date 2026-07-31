@@ -5,7 +5,7 @@ use crate::elf::elf64::{
     EV_CURRENT, Elf64_Ehdr, Elf64_Shdr,
 };
 
-mod section;
+pub(crate) mod section;
 
 #[derive(Debug)]
 pub(crate) struct Elf64Parser<'a> {
@@ -125,7 +125,7 @@ impl<'a> Elf64Parser<'a> {
     fn get_section_by_name(
         &'a self,
         name: &str,
-    ) -> Option<Result<(&'a Elf64_Shdr, &'a [u8]), ElfParseError>> {
+    ) -> Result<Option<(&'a Elf64_Shdr, &'a [u8])>, ElfParseError> {
         self.shdrs
             .iter()
             .find(|shdr| shdr.name == name)
@@ -140,5 +140,6 @@ impl<'a> Elf64Parser<'a> {
                     ))
                 }
             })
+            .transpose()
     }
 }

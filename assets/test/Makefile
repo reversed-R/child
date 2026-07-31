@@ -1,1 +1,1 @@
-build: main.o
+build: main.o sub.o

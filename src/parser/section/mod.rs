@@ -1,3 +1,3 @@
-mod rela_text;
-mod strtab;
-mod symtab;
+pub(crate) mod rela_text;
+pub(crate) mod strtab;
+pub(crate) mod symtab;

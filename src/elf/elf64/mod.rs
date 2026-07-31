@@ -224,6 +224,12 @@ pub struct Elf64_Sym {
     pub st_size: Elf64_Xword,    /* Symbol size */
 }
 
+impl Elf64_Sym {
+    pub fn is_resolved_index(&self) -> bool {
+        self.st_shndx != SHN_UNDEF && self.st_shndx < SHN_LORESERVE
+    }
+}
+
 /* The syminfo section if available contains additional information about
 every dynamic symbol.  */
 

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
-use crate::parser::Elf64Parser;
+use crate::{linker::Linker, parser::Elf64Parser};
 
 mod elf;
+mod linker;
 mod parser;
 
 fn main() {
@@ -89,19 +90,29 @@ fn main() {
         })
         .collect::<Vec<_>>();
 
-    for (bin, path) in obj_bins {
-        let elf = Elf64Parser::new(&bin, path).unwrap();
+    Linker::new(
+        obj_bins
+            .iter()
+            .map(|(bin, path)| (bin.as_slice(), path.clone()))
+            .collect(),
+    )
+    .unwrap()
+    .resolve_symbols()
+    .unwrap();
 
-        let strtab = elf.section_strtab().unwrap();
-        println!("{elf:#?}");
-        println!("-- .strtab --");
-        println!("{strtab:#?}",);
-        let symtab = elf.section_symtab(&strtab).unwrap();
-        println!("-- .symtab --");
-        println!("{symtab:#?}",);
-        println!("-- .rela.text --");
-        println!("{:#?}", elf.section_rela_text(&symtab, &strtab));
-    }
+    // for (bin, path) in obj_bins {
+    //     let elf = Elf64Parser::new(&bin, path).unwrap();
+    //
+    //     let strtab = elf.section_strtab().unwrap();
+    //     // println!("{elf:#?}");
+    //     println!("-- .strtab --");
+    //     println!("{strtab:#?}",);
+    //     let symtab = elf.section_symtab(&strtab).unwrap();
+    //     println!("-- .symtab --");
+    //     println!("{symtab:#?}",);
+    //     println!("-- .rela.text --");
+    //     println!("{:#?}", elf.section_rela_text(&symtab, &strtab));
+    // }
 }
 
 fn panic_with_usage_message() -> ! {

@@ -7,6 +7,11 @@ use crate::{
 };
 
 #[derive(Debug)]
+pub(crate) struct ElfSectionRelaText {
+    relas: Vec<ElfRela>,
+}
+
+#[derive(Debug)]
 pub(crate) struct ElfRela {
     name: String,
     rela: Elf64_Rela,
@@ -17,14 +22,13 @@ impl<'a> Elf64Parser<'a> {
         &self,
         symtab: &ElfSectionSymtab,
         strtab: &ElfSectionStrtab,
-    ) -> Result<Vec<ElfRela>, ElfParseError> {
-        let (_, bin) =
-            self.get_section_by_name(".rela.text")
-                .ok_or(ElfParseError::SectionNotFound {
-                    name: ".rela.text".into(),
-                })??;
+    ) -> Result<Option<ElfSectionRelaText>, ElfParseError> {
+        let (_, bin) = match self.get_section_by_name(".rela.text")? {
+            Some(x) => x,
+            None => return Ok(None),
+        };
 
-        (0..bin.len() / std::mem::size_of::<Elf64_Rela>())
+        let relas = (0..bin.len() / std::mem::size_of::<Elf64_Rela>())
             .map(|i| {
                 let rela_bytes: [u8; std::mem::size_of::<Elf64_Rela>()] =
                     bin[std::mem::size_of::<Elf64_Rela>() * i
@@ -50,6 +54,8 @@ impl<'a> Elf64Parser<'a> {
 
                 Ok(ElfRela { rela, name })
             })
-            .collect()
+            .collect::<Result<_, _>>()?;
+
+        Ok(Some(ElfSectionRelaText { relas }))
     }
 }
