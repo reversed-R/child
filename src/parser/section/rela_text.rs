@@ -1,6 +1,9 @@
 use crate::{
-    elf::elf64::{Elf64_Rela, SHT_RELA},
-    parser::{Elf64Parser, ElfParseError},
+    elf::elf64::{ELF64_R_SYM, ELF64_ST_TYPE, Elf64_Rela, STT_SECTION},
+    parser::{
+        Elf64Parser, ElfParseError,
+        section::{strtab::ElfSectionStrtab, symtab::ElfSectionSymtab},
+    },
 };
 
 #[derive(Debug)]
@@ -10,16 +13,18 @@ pub(crate) struct ElfRela {
 }
 
 impl<'a> Elf64Parser<'a> {
-    pub(crate) fn section_rela_text(&self) -> Result<Vec<ElfRela>, ElfParseError> {
+    pub(crate) fn section_rela_text(
+        &self,
+        symtab: &ElfSectionSymtab,
+        strtab: &ElfSectionStrtab,
+    ) -> Result<Vec<ElfRela>, ElfParseError> {
         let (_, bin) =
-            self.get_section_by_type(SHT_RELA)
+            self.get_section_by_name(".rela.text")
                 .ok_or(ElfParseError::SectionNotFound {
                     name: ".rela.text".into(),
                 })??;
 
-        let strtab = self.section_strtab()?;
-
-        Ok((0..bin.len() / std::mem::size_of::<Elf64_Rela>())
+        (0..bin.len() / std::mem::size_of::<Elf64_Rela>())
             .map(|i| {
                 let rela_bytes: [u8; std::mem::size_of::<Elf64_Rela>()] =
                     bin[std::mem::size_of::<Elf64_Rela>() * i
@@ -27,12 +32,24 @@ impl<'a> Elf64Parser<'a> {
                         .try_into()
                         .unwrap();
                 let rela: Elf64_Rela = unsafe { std::mem::transmute(rela_bytes) };
+                let index = ELF64_R_SYM(rela.r_info) as usize;
+                let sym = symtab
+                    .get(index)
+                    .ok_or(ElfParseError::SymbolNotFound { index })?;
+                let name = if ELF64_ST_TYPE(sym.sym.st_info) == STT_SECTION {
+                    self.shdrs
+                        .get(sym.sym.st_shndx as usize)
+                        .ok_or(ElfParseError::SectionNotFoundByIndex {
+                            index: sym.sym.st_shndx as usize,
+                        })?
+                        .name
+                        .clone()
+                } else {
+                    strtab.get(sym.sym.st_name as usize)
+                };
 
-                ElfRela {
-                    rela,
-                    name: strtab.get(((rela.r_info >> 32) & 0xff_ff_ff_ff) as usize),
-                }
+                Ok(ElfRela { rela, name })
             })
-            .collect())
+            .collect()
     }
 }

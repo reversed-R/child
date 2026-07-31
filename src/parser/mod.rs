@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::elf::elf64::{
     EI_CLASS, EI_DATA, EI_MAG0, EI_MAG3, EI_VERSION, ELFCLASS64, ELFDATA2LSB, ELFMAG, EM_X86_64,
-    EV_CURRENT, Elf64_Ehdr, Elf64_Shdr, Elf64_Word,
+    EV_CURRENT, Elf64_Ehdr, Elf64_Shdr,
 };
 
 mod section;
@@ -32,6 +32,8 @@ pub(crate) enum ElfParseError {
     InvalidVersion,
     InvalidMachine,
     SectionNotFound { name: String },
+    SectionNotFoundByIndex { index: usize },
+    SymbolNotFound { index: usize },
 }
 
 impl<'a> Elf64Parser<'a> {
@@ -120,13 +122,13 @@ impl<'a> Elf64Parser<'a> {
         })
     }
 
-    fn get_section_by_type(
+    fn get_section_by_name(
         &'a self,
-        typ: Elf64_Word,
+        name: &str,
     ) -> Option<Result<(&'a Elf64_Shdr, &'a [u8]), ElfParseError>> {
         self.shdrs
             .iter()
-            .find(|shdr| shdr.hdr.sh_type == typ)
+            .find(|shdr| shdr.name == name)
             .map(|shdr| {
                 if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
                     Err(ElfParseError::TooShort)

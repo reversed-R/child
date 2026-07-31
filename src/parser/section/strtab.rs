@@ -1,8 +1,9 @@
 use crate::{
-    elf::elf64::{Elf64_Shdr, SHT_STRTAB},
+    elf::elf64::Elf64_Shdr,
     parser::{Elf64Parser, ElfParseError},
 };
 
+#[derive(Debug)]
 pub(crate) struct ElfSectionStrtab<'a> {
     shdr: &'a Elf64_Shdr,
     bin: &'a [u8],
@@ -10,7 +11,7 @@ pub(crate) struct ElfSectionStrtab<'a> {
 
 impl<'a> Elf64Parser<'a> {
     pub(crate) fn section_strtab(&'a self) -> Result<ElfSectionStrtab<'a>, ElfParseError> {
-        self.get_section_by_type(SHT_STRTAB)
+        self.get_section_by_name(".strtab")
             .ok_or(ElfParseError::SectionNotFound {
                 name: ".strtab".into(),
             })?
