@@ -138,7 +138,7 @@ impl<'a> Linker<'a> {
         let mut missing_syms = HashSet::new();
 
         for (obj_index, obj) in self.objs.iter().enumerate() {
-            for (sym_index, sym) in obj.symtab.syms.iter().skip(1).enumerate() {
+            for (sym_index, sym) in obj.symtab.syms.iter().enumerate().skip(1) {
                 if sym.sym.st_shndx == SHN_UNDEF {
                     let mut found = false;
                     for (o_index, o) in self.objs.iter().enumerate() {
@@ -146,7 +146,7 @@ impl<'a> Linker<'a> {
                             continue;
                         }
 
-                        for (s_index, s) in o.symtab.syms.iter().skip(1).enumerate() {
+                        for (s_index, s) in o.symtab.syms.iter().enumerate().skip(1) {
                             if sym.name == s.name
                                 && ELF64_ST_BIND(s.sym.st_info) == STB_GLOBAL
                                 && s.sym.is_resolved_index()
@@ -169,10 +169,6 @@ impl<'a> Linker<'a> {
 
                     if !found {
                         for (o_index, o) in self.shared_objs.iter().enumerate() {
-                            if obj_index == o_index {
-                                continue;
-                            }
-
                             for (s_index, s) in o.symtab.syms.iter().skip(1).enumerate() {
                                 if sym.name == s.name
                                     && ELF64_ST_BIND(s.sym.st_info) == STB_GLOBAL
@@ -203,7 +199,7 @@ impl<'a> Linker<'a> {
         }
 
         if duplicated_syms.is_empty() && missing_syms.is_empty() {
-            for (o, resolved) in self.objs.iter_mut().zip(&mut resolved_syms) {
+            for (o, resolved) in self.objs.iter_mut().zip(&mut resolved_syms).skip(1) {
                 for (sym_index, sym) in o.symtab.syms.iter_mut().enumerate() {
                     sym.resolved_sym = Some(resolved.remove(&sym_index).unwrap());
                 }
