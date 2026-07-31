@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{linker::Linker, parser::Elf64Parser};
+use crate::linker::Linker;
 
 mod elf;
 mod linker;
@@ -89,9 +89,22 @@ fn main() {
             )
         })
         .collect::<Vec<_>>();
+    let shared_obj_bins = shared_obj_paths
+        .into_iter()
+        .map(|path| {
+            (
+                std::fs::read(&path).unwrap_or_else(|_| panic!("Failed to read: {path:?}")),
+                path,
+            )
+        })
+        .collect::<Vec<_>>();
 
     Linker::new(
         obj_bins
+            .iter()
+            .map(|(bin, path)| (bin.as_slice(), path.clone()))
+            .collect(),
+        shared_obj_bins
             .iter()
             .map(|(bin, path)| (bin.as_slice(), path.clone()))
             .collect(),
@@ -99,20 +112,6 @@ fn main() {
     .unwrap()
     .resolve_symbols()
     .unwrap();
-
-    // for (bin, path) in obj_bins {
-    //     let elf = Elf64Parser::new(&bin, path).unwrap();
-    //
-    //     let strtab = elf.section_strtab().unwrap();
-    //     // println!("{elf:#?}");
-    //     println!("-- .strtab --");
-    //     println!("{strtab:#?}",);
-    //     let symtab = elf.section_symtab(&strtab).unwrap();
-    //     println!("-- .symtab --");
-    //     println!("{symtab:#?}",);
-    //     println!("-- .rela.text --");
-    //     println!("{:#?}", elf.section_rela_text(&symtab, &strtab));
-    // }
 }
 
 fn panic_with_usage_message() -> ! {

@@ -13,6 +13,7 @@ use crate::{
 
 pub(crate) struct Linker<'a> {
     objs: Vec<ElfObject<'a>>,
+    shared_objs: Vec<ElfSharedObject<'a>>,
     resolved_syms: Vec<ResolvedSym>,
 }
 
@@ -32,15 +33,28 @@ struct ElfObject<'a> {
     symtab: ElfSectionSymtab,
     rela_text: Option<ElfSectionRelaText>,
 }
+struct ElfSharedObject<'a> {
+    elf: Elf64Parser<'a>,
+    symtab: ElfSectionSymtab,
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedObjIndexKind {
+    Obj(usize),
+    Shared(usize),
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedSym {
-    obj_index: usize,
+    obj_index: ResolvedObjIndexKind,
     sym_index: usize,
 }
 
 impl<'a> Linker<'a> {
-    pub(crate) fn new(objs: Vec<(&'a [u8], PathBuf)>) -> Result<Self, LinkerError> {
+    pub(crate) fn new(
+        objs: Vec<(&'a [u8], PathBuf)>,
+        shared_objs: Vec<(&'a [u8], PathBuf)>,
+    ) -> Result<Self, LinkerError> {
         let objs = objs
             .into_iter()
             .map(|(bin, path)| {
@@ -67,8 +81,36 @@ impl<'a> Linker<'a> {
             })
             .collect::<Vec<Result<_, _>>>();
 
+        let shared_objs = shared_objs
+            .into_iter()
+            .map(|(bin, path)| {
+                let elf = Elf64Parser::new(bin, path)?;
+                // println!("{elf:#?}");
+
+                let strtab = elf.section_strtab()?;
+                println!("-- .strtab --");
+                println!("{strtab:#?}",);
+
+                let symtab = elf.section_symtab(&strtab)?;
+                println!("-- .symtab --");
+                println!("{symtab:#?}",);
+
+                Ok(ElfSharedObject { elf, symtab })
+            })
+            .collect::<Vec<Result<_, _>>>();
+
         let mut errors = Vec::new();
         let objs = objs
+            .into_iter()
+            .filter_map(|res| match res {
+                Ok(o) => Some(o),
+                Err(e) => {
+                    errors.push(e);
+                    None
+                }
+            })
+            .collect();
+        let shared_objs = shared_objs
             .into_iter()
             .filter_map(|res| match res {
                 Ok(o) => Some(o),
@@ -82,6 +124,7 @@ impl<'a> Linker<'a> {
         if errors.is_empty() {
             Ok(Self {
                 objs,
+                shared_objs,
                 resolved_syms: Vec::new(),
             })
         } else {
@@ -111,7 +154,7 @@ impl<'a> Linker<'a> {
                                 match resolved_syms[obj_index].entry(sym_index) {
                                     Entry::Vacant(e) => {
                                         e.insert(ResolvedSym {
-                                            obj_index: o_index,
+                                            obj_index: ResolvedObjIndexKind::Obj(o_index),
                                             sym_index: s_index,
                                         });
                                         found = true;
@@ -123,6 +166,35 @@ impl<'a> Linker<'a> {
                             }
                         }
                     }
+
+                    if !found {
+                        for (o_index, o) in self.shared_objs.iter().enumerate() {
+                            if obj_index == o_index {
+                                continue;
+                            }
+
+                            for (s_index, s) in o.symtab.syms.iter().skip(1).enumerate() {
+                                if sym.name == s.name
+                                    && ELF64_ST_BIND(s.sym.st_info) == STB_GLOBAL
+                                    && s.sym.is_resolved_index()
+                                {
+                                    match resolved_syms[obj_index].entry(sym_index) {
+                                        Entry::Vacant(e) => {
+                                            e.insert(ResolvedSym {
+                                                obj_index: ResolvedObjIndexKind::Shared(o_index),
+                                                sym_index: s_index,
+                                            });
+                                            found = true;
+                                        }
+                                        Entry::Occupied(_) => {
+                                            duplicated_syms.insert(sym.name.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if !found {
                         missing_syms.insert(sym.name.clone());
                     }
