@@ -334,14 +334,17 @@ pub struct Elf64_Rela {
     pub r_addend: Elf64_Sxword, /* Addend */
 }
 
-/* How to extract and insert information held in the r_info field.  */
+impl Elf64_Rela {
+    pub fn r_sym(&self) -> Elf64_Word {
+        (self.r_info >> 32) as Elf64_Word
+    }
 
-pub const fn ELF64_R_SYM(info: Elf64_Xword) -> Elf64_Word {
-    (info >> 32) as Elf64_Word
+    pub fn r_type(&self) -> Elf64_Word {
+        (self.r_info & 0xffffffff) as Elf64_Word
+    }
 }
-pub const fn ELF64_R_TYPE(info: Elf64_Xword) -> Elf64_Word {
-    (info & 0xffffffff) as Elf64_Word
-}
+
+/* How to extract and insert information held in the r_info field.  */
 pub const fn ELF64_R_INFO(sym: Elf64_Word, r#type: Elf64_Word) -> Elf64_Xword {
     ((sym as Elf64_Xword) << 32) + (r#type as Elf64_Xword)
 }

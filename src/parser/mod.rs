@@ -12,14 +12,14 @@ pub(crate) struct Elf64Parser<'a> {
     bin: &'a [u8],
     path: PathBuf,
     hdr: Elf64_Ehdr,
-    shdrs: Vec<ElfSectionHeaderEntry>,
+    pub(crate) shdrs: Vec<ElfSectionHeaderEntry>,
 }
 
 #[derive(Debug)]
-struct ElfSectionHeaderEntry {
-    index: usize,
-    name: String,
-    hdr: Elf64_Shdr,
+pub(crate) struct ElfSectionHeaderEntry {
+    pub(crate) index: usize,
+    pub(crate) name: String,
+    pub(crate) hdr: Elf64_Shdr,
 }
 
 #[derive(Debug)]
@@ -125,6 +125,18 @@ impl<'a> Elf64Parser<'a> {
         })
     }
 
+    pub(crate) fn get_section_body(
+        &self,
+        shdr: &ElfSectionHeaderEntry,
+    ) -> Result<&'a [u8], ElfParseError> {
+        if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
+            Err(ElfParseError::TooShort)
+        } else {
+            Ok(&self.bin
+                [shdr.hdr.sh_offset as usize..(shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize])
+        }
+    }
+
     fn get_section_with<F: FnMut(&&ElfSectionHeaderEntry) -> bool>(
         &'a self,
         f: F,
@@ -132,17 +144,7 @@ impl<'a> Elf64Parser<'a> {
         self.shdrs
             .iter()
             .find(f)
-            .map(|shdr| {
-                if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
-                    Err(ElfParseError::TooShort)
-                } else {
-                    Ok((
-                        &shdr.hdr,
-                        &self.bin[shdr.hdr.sh_offset as usize
-                            ..(shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize],
-                    ))
-                }
-            })
+            .map(|shdr| self.get_section_body(shdr).map(|body| (&shdr.hdr, body)))
             .transpose()
     }
 

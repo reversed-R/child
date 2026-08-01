@@ -1,20 +1,28 @@
 use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
+    collections::{HashMap, HashSet},
     path::PathBuf,
 };
 
 use crate::{
-    elf::elf64::{ELF64_ST_BIND, SHN_UNDEF, STB_GLOBAL},
+    linker::symbol::ResolvedSym,
     parser::{
         Elf64Parser, ElfParseError,
         section::{rela_text::ElfSectionRelaText, symtab::ElfSectionSymtab},
     },
 };
 
+mod relocation;
+mod section;
+pub(crate) mod symbol;
+
 pub(crate) struct Linker<'a> {
     objs: Vec<ElfObject<'a>>,
     shared_objs: Vec<ElfSharedObject<'a>>,
-    resolved_syms: Vec<ResolvedSym>,
+    resolved_syms: Vec<HashMap<usize, ResolvedSym>>,
+    // resolved_syms[obj_index][symbol_index]
+    sym_addrs: Vec<HashMap<usize, usize>>,
+    // sym_addrs[obj_index][symbol_index]
+    dynsym_addrs: Vec<HashMap<usize, usize>>,
 }
 
 #[derive(Debug)]
@@ -36,18 +44,6 @@ struct ElfObject<'a> {
 struct ElfSharedObject<'a> {
     elf: Elf64Parser<'a>,
     symtab: ElfSectionSymtab,
-}
-
-#[derive(Debug, Clone)]
-enum ResolvedObjIndexKind {
-    Obj(usize),
-    Shared(usize),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ResolvedSym {
-    obj_index: ResolvedObjIndexKind,
-    sym_index: usize,
 }
 
 impl<'a> Linker<'a> {
@@ -99,7 +95,7 @@ impl<'a> Linker<'a> {
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
         let shared_objs = shared_objs
             .into_iter()
             .filter_map(|res| match res {
@@ -109,10 +105,12 @@ impl<'a> Linker<'a> {
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         if errors.is_empty() {
             Ok(Self {
+                sym_addrs: vec![HashMap::new(); objs.len()],
+                dynsym_addrs: vec![HashMap::new(); shared_objs.len()],
                 objs,
                 shared_objs,
                 resolved_syms: Vec::new(),
@@ -122,87 +120,15 @@ impl<'a> Linker<'a> {
         }
     }
 
-    pub(crate) fn resolve_symbols(&mut self) -> Result<(), LinkerError> {
-        let mut resolved_syms = vec![HashMap::<usize, ResolvedSym>::new(); self.objs.len()];
-        let mut duplicated_syms = HashSet::new();
-        let mut missing_syms = HashSet::new();
+    pub(crate) fn link(mut self) -> Result<(), LinkerError> {
+        self.resolve_symbols()?;
 
-        for (obj_index, obj) in self.objs.iter().enumerate() {
-            for (sym_index, sym) in obj.symtab.syms.iter().enumerate().skip(1) {
-                if sym.sym.st_shndx == SHN_UNDEF {
-                    let mut found = false;
-                    for (o_index, o) in self.objs.iter().enumerate() {
-                        if obj_index == o_index {
-                            continue;
-                        }
+        let (text_section, data_section) = self.merge_sections()?;
 
-                        for (s_index, s) in o.symtab.syms.iter().enumerate().skip(1) {
-                            if sym.name == s.name
-                                && ELF64_ST_BIND(s.sym.st_info) == STB_GLOBAL
-                                && s.sym.is_resolved_index()
-                            {
-                                match resolved_syms[obj_index].entry(sym_index) {
-                                    Entry::Vacant(e) => {
-                                        e.insert(ResolvedSym {
-                                            obj_index: ResolvedObjIndexKind::Obj(o_index),
-                                            sym_index: s_index,
-                                        });
-                                        found = true;
-                                    }
-                                    Entry::Occupied(_) => {
-                                        duplicated_syms.insert(sym.name.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
+        self.arrange_sections(text_section, data_section)?;
 
-                    if !found {
-                        for (o_index, o) in self.shared_objs.iter().enumerate() {
-                            for (s_index, s) in o.symtab.syms.iter().skip(1).enumerate() {
-                                if sym.name == s.name
-                                    && ELF64_ST_BIND(s.sym.st_info) == STB_GLOBAL
-                                    && s.sym.is_resolved_index()
-                                {
-                                    match resolved_syms[obj_index].entry(sym_index) {
-                                        Entry::Vacant(e) => {
-                                            e.insert(ResolvedSym {
-                                                obj_index: ResolvedObjIndexKind::Shared(o_index),
-                                                sym_index: s_index,
-                                            });
-                                            found = true;
-                                        }
-                                        Entry::Occupied(_) => {
-                                            duplicated_syms.insert(sym.name.clone());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+        self.relocate()?;
 
-                    if !found {
-                        missing_syms.insert(sym.name.clone());
-                    }
-                }
-            }
-        }
-
-        if duplicated_syms.is_empty() && missing_syms.is_empty() {
-            for (o, resolved) in self.objs.iter_mut().zip(&mut resolved_syms) {
-                for (sym_index, sym) in o.symtab.syms.iter_mut().enumerate().skip(1) {
-                    if sym.sym.st_shndx == SHN_UNDEF {
-                        sym.resolved_sym = Some(resolved.remove(&sym_index).unwrap());
-                    }
-                }
-            }
-
-            Ok(())
-        } else {
-            Err(LinkerError::SymbolResolveFailed {
-                duplicated_syms,
-                missing_syms,
-            })
-        }
+        todo!()
     }
 }

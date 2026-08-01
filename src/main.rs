@@ -110,7 +110,7 @@ fn main() {
             .collect(),
     )
     .unwrap()
-    .resolve_symbols()
+    .link()
     .unwrap();
 }
 

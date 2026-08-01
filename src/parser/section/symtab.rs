@@ -1,6 +1,6 @@
 use crate::{
     elf::elf64::{Elf64_Sym, SHT_DYNSYM, SHT_SYMTAB},
-    linker::ResolvedSym,
+    linker::symbol::ResolvedSym,
     parser::{Elf64Parser, ElfParseError, section::strtab::ElfSectionStrtab},
 };
 

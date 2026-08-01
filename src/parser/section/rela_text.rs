@@ -1,5 +1,5 @@
 use crate::{
-    elf::elf64::{ELF64_R_SYM, ELF64_ST_TYPE, Elf64_Rela, STT_SECTION},
+    elf::elf64::{ELF64_ST_TYPE, Elf64_Rela, STT_SECTION},
     parser::{
         Elf64Parser, ElfParseError,
         section::{strtab::ElfSectionStrtab, symtab::ElfSectionSymtab},
@@ -8,13 +8,13 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) struct ElfSectionRelaText {
-    relas: Vec<ElfRela>,
+    pub(crate) relas: Vec<ElfRela>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ElfRela {
-    name: String,
-    rela: Elf64_Rela,
+    pub(crate) name: String,
+    pub(crate) rela: Elf64_Rela,
 }
 
 impl<'a> Elf64Parser<'a> {
@@ -36,7 +36,7 @@ impl<'a> Elf64Parser<'a> {
                         .try_into()
                         .unwrap();
                 let rela: Elf64_Rela = unsafe { std::mem::transmute(rela_bytes) };
-                let index = ELF64_R_SYM(rela.r_info) as usize;
+                let index = rela.r_sym() as usize;
                 let sym = symtab
                     .get(index)
                     .ok_or(ElfParseError::SymbolNotFound { index })?;
