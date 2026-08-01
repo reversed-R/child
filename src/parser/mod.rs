@@ -125,10 +125,7 @@ impl<'a> Elf64Parser<'a> {
         })
     }
 
-    pub(crate) fn get_section_body(
-        &self,
-        shdr: &ElfSectionHeaderEntry,
-    ) -> Result<&'a [u8], ElfParseError> {
+    fn get_section_body(&self, shdr: &ElfSectionHeaderEntry) -> Result<&'a [u8], ElfParseError> {
         if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
             Err(ElfParseError::TooShort)
         } else {
@@ -140,18 +137,18 @@ impl<'a> Elf64Parser<'a> {
     fn get_section_with<F: FnMut(&&ElfSectionHeaderEntry) -> bool>(
         &'a self,
         f: F,
-    ) -> Result<Option<(&'a Elf64_Shdr, &'a [u8])>, ElfParseError> {
+    ) -> Result<Option<(&'a ElfSectionHeaderEntry, &'a [u8])>, ElfParseError> {
         self.shdrs
             .iter()
             .find(f)
-            .map(|shdr| self.get_section_body(shdr).map(|body| (&shdr.hdr, body)))
+            .map(|shdr| self.get_section_body(shdr).map(|body| (shdr, body)))
             .transpose()
     }
 
     fn get_section_by_name(
         &'a self,
         name: &str,
-    ) -> Result<Option<(&'a Elf64_Shdr, &'a [u8])>, ElfParseError> {
+    ) -> Result<Option<(&'a ElfSectionHeaderEntry, &'a [u8])>, ElfParseError> {
         self.get_section_with(|shdr| shdr.name == name)
     }
 }

@@ -6,6 +6,7 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) struct ElfSectionSymtab {
+    pub(crate) sect_index: usize,
     pub(crate) syms: Vec<ElfSym>,
 }
 
@@ -28,10 +29,11 @@ impl<'a> Elf64Parser<'a> {
                 name: ".symtab".into(),
             })?;
 
-        let strtab = self.section_strtab(symtab_shdr.sh_link as usize)?;
+        let strtab = self.section_strtab(symtab_shdr.hdr.sh_link as usize)?;
 
         Ok((
             ElfSectionSymtab {
+                sect_index: symtab_shdr.index,
                 syms: (0..bin.len() / std::mem::size_of::<Elf64_Sym>())
                     .map(|i| {
                         let sym_bytes: [u8; std::mem::size_of::<Elf64_Sym>()] = bin

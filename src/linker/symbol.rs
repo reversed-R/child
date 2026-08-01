@@ -84,10 +84,16 @@ impl<'a> Linker<'a> {
         }
 
         if duplicated_syms.is_empty() && missing_syms.is_empty() {
-            for (o, resolved) in self.objs.iter_mut().zip(&resolved_syms) {
+            for (obj_index, (o, resolved)) in self.objs.iter_mut().zip(&resolved_syms).enumerate() {
                 for (sym_index, sym) in o.symtab.syms.iter_mut().enumerate().skip(1) {
                     if sym.sym.st_shndx == SHN_UNDEF {
                         sym.resolved_sym = Some(resolved.get(&sym_index).unwrap().clone());
+                    } else {
+                        // for bug prevension, symbol points itself.
+                        sym.resolved_sym = Some(ResolvedSym {
+                            obj_index: ResolvedObjIndexKind::Obj(obj_index),
+                            sym_index,
+                        })
                     }
                 }
             }

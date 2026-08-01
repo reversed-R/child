@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    elf::elf64::Elf64_Word,
     linker::symbol::ResolvedSym,
     parser::{
         Elf64Parser, ElfParseError,
@@ -19,10 +20,6 @@ pub(crate) struct Linker<'a> {
     objs: Vec<ElfObject<'a>>,
     shared_objs: Vec<ElfSharedObject<'a>>,
     resolved_syms: Vec<HashMap<usize, ResolvedSym>>,
-    // resolved_syms[obj_index][symbol_index]
-    sym_addrs: Vec<HashMap<usize, usize>>,
-    // sym_addrs[obj_index][symbol_index]
-    dynsym_addrs: Vec<HashMap<usize, usize>>,
 }
 
 #[derive(Debug)]
@@ -33,6 +30,12 @@ pub(crate) enum LinkerError {
     },
     ParseError {
         errors: Vec<ElfParseError>,
+    },
+    UnsupportedRelocationType {
+        r_type: Elf64_Word,
+    },
+    UnsupportedSection {
+        name: String,
     },
 }
 
@@ -109,8 +112,6 @@ impl<'a> Linker<'a> {
 
         if errors.is_empty() {
             Ok(Self {
-                sym_addrs: vec![HashMap::new(); objs.len()],
-                dynsym_addrs: vec![HashMap::new(); shared_objs.len()],
                 objs,
                 shared_objs,
                 resolved_syms: Vec::new(),
@@ -125,9 +126,9 @@ impl<'a> Linker<'a> {
 
         let (text_section, data_section) = self.merge_sections()?;
 
-        self.arrange_sections(text_section, data_section)?;
+        let sects = self.arrange_sections(text_section, data_section)?;
 
-        self.relocate()?;
+        self.relocate(sects)?;
 
         todo!()
     }

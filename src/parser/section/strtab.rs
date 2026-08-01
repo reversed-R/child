@@ -18,7 +18,10 @@ impl<'a> Elf64Parser<'a> {
             .ok_or(ElfParseError::SectionNotFound {
                 name: ".strtab".into(),
             })
-            .map(|(shdr, bin)| ElfSectionStrtab { shdr, bin })
+            .map(|(shdr, bin)| ElfSectionStrtab {
+                shdr: &shdr.hdr,
+                bin,
+            })
     }
 }
 
