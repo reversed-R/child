@@ -59,13 +59,8 @@ impl<'a> Linker<'a> {
             .into_iter()
             .map(|(bin, path)| {
                 let elf = Elf64Parser::new(bin, path)?;
-                // println!("{elf:#?}");
 
-                let strtab = elf.section_strtab()?;
-                println!("-- .strtab --");
-                println!("{strtab:#?}",);
-
-                let symtab = elf.section_symtab(&strtab)?;
+                let (symtab, strtab) = elf.section_symtab()?;
                 println!("-- .symtab --");
                 println!("{symtab:#?}",);
 
@@ -85,15 +80,10 @@ impl<'a> Linker<'a> {
             .into_iter()
             .map(|(bin, path)| {
                 let elf = Elf64Parser::new(bin, path)?;
-                // println!("{elf:#?}");
 
-                let strtab = elf.section_strtab()?;
-                println!("-- .strtab --");
-                println!("{strtab:#?}",);
-
-                let symtab = elf.section_symtab(&strtab)?;
-                println!("-- .symtab --");
-                println!("{symtab:#?}",);
+                let (symtab, _) = elf.section_symtab()?;
+                // println!("-- .symtab --");
+                // println!("{symtab:#?}",);
 
                 Ok(ElfSharedObject { elf, symtab })
             })
@@ -199,9 +189,11 @@ impl<'a> Linker<'a> {
         }
 
         if duplicated_syms.is_empty() && missing_syms.is_empty() {
-            for (o, resolved) in self.objs.iter_mut().zip(&mut resolved_syms).skip(1) {
-                for (sym_index, sym) in o.symtab.syms.iter_mut().enumerate() {
-                    sym.resolved_sym = Some(resolved.remove(&sym_index).unwrap());
+            for (o, resolved) in self.objs.iter_mut().zip(&mut resolved_syms) {
+                for (sym_index, sym) in o.symtab.syms.iter_mut().enumerate().skip(1) {
+                    if sym.sym.st_shndx == SHN_UNDEF {
+                        sym.resolved_sym = Some(resolved.remove(&sym_index).unwrap());
+                    }
                 }
             }
 

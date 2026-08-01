@@ -10,8 +10,11 @@ pub(crate) struct ElfSectionStrtab<'a> {
 }
 
 impl<'a> Elf64Parser<'a> {
-    pub(crate) fn section_strtab(&'a self) -> Result<ElfSectionStrtab<'a>, ElfParseError> {
-        self.get_section_by_name(".strtab")?
+    pub(crate) fn section_strtab(
+        &'a self,
+        index: usize,
+    ) -> Result<ElfSectionStrtab<'a>, ElfParseError> {
+        self.get_section_with(|shdr| shdr.index == index)?
             .ok_or(ElfParseError::SectionNotFound {
                 name: ".strtab".into(),
             })

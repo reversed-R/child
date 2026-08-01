@@ -17,6 +17,7 @@ pub(crate) struct Elf64Parser<'a> {
 
 #[derive(Debug)]
 struct ElfSectionHeaderEntry {
+    index: usize,
     name: String,
     hdr: Elf64_Shdr,
 }
@@ -93,7 +94,8 @@ impl<'a> Elf64Parser<'a> {
         let shstrtab = &bin[shstr.sh_offset as usize..(shstr.sh_offset + shstr.sh_size) as usize];
         let shdrs = shdrs
             .into_iter()
-            .map(|shdr| {
+            .enumerate()
+            .map(|(index, shdr)| {
                 if shstrtab.len() < shdr.sh_name as usize {
                     Err(ElfParseError::TooShort)
                 } else {
@@ -103,6 +105,7 @@ impl<'a> Elf64Parser<'a> {
                                 String::from_utf8(shstrtab[shdr.sh_name as usize..i].to_vec())
                                     .expect("invalid utf8");
                             return Ok(ElfSectionHeaderEntry {
+                                index,
                                 name: sh_name,
                                 hdr: shdr,
                             });
@@ -122,13 +125,13 @@ impl<'a> Elf64Parser<'a> {
         })
     }
 
-    fn get_section_by_name(
+    fn get_section_with<F: FnMut(&&ElfSectionHeaderEntry) -> bool>(
         &'a self,
-        name: &str,
+        f: F,
     ) -> Result<Option<(&'a Elf64_Shdr, &'a [u8])>, ElfParseError> {
         self.shdrs
             .iter()
-            .find(|shdr| shdr.name == name)
+            .find(f)
             .map(|shdr| {
                 if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
                     Err(ElfParseError::TooShort)
@@ -141,5 +144,12 @@ impl<'a> Elf64Parser<'a> {
                 }
             })
             .transpose()
+    }
+
+    fn get_section_by_name(
+        &'a self,
+        name: &str,
+    ) -> Result<Option<(&'a Elf64_Shdr, &'a [u8])>, ElfParseError> {
+        self.get_section_with(|shdr| shdr.name == name)
     }
 }
