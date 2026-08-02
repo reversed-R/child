@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io::Write, os::unix::fs::OpenOptionsExt, path::PathBuf};
 
 use crate::linker::Linker;
 
@@ -99,7 +99,7 @@ fn main() {
         })
         .collect::<Vec<_>>();
 
-    Linker::new(
+    let bin = Linker::new(
         obj_bins
             .iter()
             .map(|(bin, path)| (bin.as_slice(), path.clone()))
@@ -112,6 +112,17 @@ fn main() {
     .unwrap()
     .link()
     .unwrap();
+
+    let out_path = "a.out";
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true) // overwrite
+        .mode(0o755)
+        .open(out_path)
+        .unwrap_or_else(|e| panic!("Failed to open {out_path}: {e}"));
+    file.write_all(&bin)
+        .unwrap_or_else(|e| panic!("Failed to write {out_path}: {e}"));
 }
 
 fn panic_with_usage_message() -> ! {

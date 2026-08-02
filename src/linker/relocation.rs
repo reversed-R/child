@@ -9,11 +9,11 @@ use crate::{
 };
 
 impl<'a> Linker<'a> {
-    pub(super) fn relocate(&self, mut sects: OutputSectionList) -> Result<(), LinkerError> {
+    pub(super) fn relocate(&self, sects: &mut OutputSectionList) -> Result<(), LinkerError> {
         for (obj_index, o) in self.objs.iter().enumerate() {
             if let Some(relas) = &o.rela_text {
                 for rela in &relas.relas {
-                    self.patch_relocation(obj_index, o, rela, &mut sects)?;
+                    self.patch_relocation(obj_index, o, rela, sects)?;
                 }
             }
         }
@@ -75,7 +75,7 @@ impl<'a> Linker<'a> {
 
     // (obj_index, sym_index) で指定したシンボルが、配置確定後の出力ファイル上で
     // 最終的にどのアドレスに置かれるかを求める
-    fn symbol_address(
+    pub(super) fn symbol_address(
         &self,
         obj_index: usize,
         sym_index: usize,

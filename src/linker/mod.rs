@@ -12,6 +12,7 @@ use crate::{
     },
 };
 
+mod output;
 mod relocation;
 mod section;
 pub(crate) mod symbol;
@@ -37,6 +38,7 @@ pub(crate) enum LinkerError {
     UnsupportedSection {
         name: String,
     },
+    EntryPointNotFound,
 }
 
 struct ElfObject<'a> {
@@ -121,13 +123,13 @@ impl<'a> Linker<'a> {
         }
     }
 
-    pub(crate) fn link(mut self) -> Result<(), LinkerError> {
+    pub(crate) fn link(mut self) -> Result<Vec<u8>, LinkerError> {
         self.resolve_symbols()?;
 
-        let sects = self.merge_and_arrange_sections()?;
+        let mut sects = self.merge_and_arrange_sections()?;
 
-        self.relocate(sects)?;
+        self.relocate(&mut sects)?;
 
-        todo!()
+        self.output_elf(sects)
     }
 }

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::linker::{Linker, LinkerError};
+use crate::linker::{Linker, LinkerError, output::OUTPUT_ELF_HEADER_RESERVED_SIZE};
 
-const TEXT_BASE_ADDR: usize = 0x400000;
-const PAGE_SIZE: usize = 0x1000;
+pub(super) const TEXT_BASE_ADDR: usize = 0x400000;
+pub(super) const PAGE_SIZE: usize = 0x1000;
 
 pub(super) struct OutputSectionList {
     pub(super) text: OutputSection,
@@ -27,7 +27,7 @@ pub(super) struct OutputSection {
 }
 
 impl OutputSection {
-    fn bytes_len(&self) -> usize {
+    pub(super) fn bytes_len(&self) -> usize {
         match &self.bytes {
             OutputSectionBytesKind::Bytes(bytes) => bytes.len(),
             OutputSectionBytesKind::NobitsLen(len) => *len,
@@ -182,11 +182,10 @@ impl<'a> Linker<'a> {
     ) -> Result<OutputSectionList, LinkerError> {
         // page is devided between segments
         // which have different (Read-Write-Execute) permissions.
-        // TODO:
-        // program header の生成
 
         // R-X segments
-        sects.text.base = TEXT_BASE_ADDR;
+        // make a gap to load Ehdr and Phdrs
+        sects.text.base = TEXT_BASE_ADDR + OUTPUT_ELF_HEADER_RESERVED_SIZE;
         // R-- segments
         sects.rodata.base = sects.text.end_addr().next_multiple_of(PAGE_SIZE);
         // RW- segments
