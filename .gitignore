@@ -2,4 +2,6 @@
 *.o
 *.so
 *.out
+*.s
+!assets/test/crt0.s
 .env

@@ -34,11 +34,6 @@ fn main() {
         }
     }
 
-    println!("obj_paths: {obj_paths:?}");
-    println!("shared_obj_names: {shared_obj_names:?}");
-    println!("shared_obj_base_paths: {shared_obj_base_paths:?}");
-    println!("dyn_linker: {dyn_linker:?}");
-
     if obj_paths.is_empty() {
         panic!("At least 1 object file must be passed");
     }

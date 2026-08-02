@@ -60,14 +60,8 @@ impl<'a> Linker<'a> {
             .into_iter()
             .map(|(bin, path)| {
                 let elf = Elf64Parser::new(bin, path)?;
-
                 let (symtab, strtab) = elf.section_symtab()?;
-                println!("-- .symtab --");
-                println!("{symtab:#?}",);
-
                 let rela_text = elf.section_rela_text(&symtab, &strtab)?;
-                println!("-- .rela.text --");
-                println!("{rela_text:#?}");
 
                 Ok(ElfObject {
                     elf,
@@ -81,10 +75,7 @@ impl<'a> Linker<'a> {
             .into_iter()
             .map(|(bin, path)| {
                 let elf = Elf64Parser::new(bin, path)?;
-
                 let (symtab, _) = elf.section_symtab()?;
-                // println!("-- .symtab --");
-                // println!("{symtab:#?}",);
 
                 Ok(ElfSharedObject { elf, symtab })
             })
