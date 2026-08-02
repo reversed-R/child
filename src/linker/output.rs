@@ -2,31 +2,33 @@ use std::collections::HashMap;
 
 use crate::{
     elf::elf64::{
-        ELFCLASS64, ELFDATA2LSB, ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3, ELFOSABI_LINUX, EM_X86_64,
-        ET_EXEC, EV_CURRENT, Elf64_Addr, Elf64_Ehdr, Elf64_Half, Elf64_Off, Elf64_Phdr, Elf64_Shdr,
-        Elf64_Word, Elf64_Xword, PF_R, PF_W, PF_X, PT_LOAD, SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE,
-        SHT_NOBITS, SHT_NULL, SHT_PROGBITS, SHT_STRTAB,
+        ELF64_ST_INFO, ELF64_ST_TYPE, ELFCLASS64, ELFDATA2LSB, ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3,
+        ELFOSABI_LINUX, EM_X86_64, ET_EXEC, EV_CURRENT, Elf64_Addr, Elf64_Ehdr, Elf64_Half,
+        Elf64_Off, Elf64_Phdr, Elf64_Shdr, Elf64_Sym, Elf64_Word, Elf64_Xword, PF_R, PF_W, PF_X,
+        PT_LOAD, SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHN_UNDEF, SHT_NOBITS, SHT_NULL,
+        SHT_PROGBITS, SHT_STRTAB, STB_GLOBAL, STV_DEFAULT,
     },
     linker::{
         Linker, LinkerError,
         section::{
             OutputSection, OutputSectionBytesKind, OutputSectionList, PAGE_SIZE, TEXT_BASE_ADDR,
         },
+        symbol::ResolvedDynSym,
     },
 };
 
-// .shstrtab の中身と、名前からその中でのオフセットを引くためのテーブル
-struct Shstrtab {
+// .shstrtab, .dynstr の中身と、名前からその中でのオフセットを引くためのテーブル
+struct Strtab<'a> {
     bytes: Vec<u8>,
-    offsets: HashMap<&'static str, Elf64_Word>,
+    offsets: HashMap<&'a str, Elf64_Word>,
 }
 
-impl Shstrtab {
-    fn new() -> Self {
+impl<'a> Strtab<'a> {
+    fn new(strs: Vec<&'a str>) -> Self {
         let mut bytes = vec![0u8]; // the 0 at offset = 0 is for NULL section
         let mut offsets = HashMap::new();
 
-        for name in [".text", ".rodata", ".data", ".bss", ".shstrtab"] {
+        for name in strs.into_iter() {
             offsets.insert(name, bytes.len() as Elf64_Word);
             bytes.extend_from_slice(name.as_bytes());
             bytes.push(0);
@@ -44,6 +46,9 @@ struct OutputFileLayout {
     text: usize,
     rodata: usize,
     data: usize,
+    dynsym: usize,
+    dynstr: usize,
+    hash: usize,
     shstrtab: usize,
     shdrs: usize,
 }
@@ -54,18 +59,30 @@ pub(super) const OUTPUT_ELF_HEADER_RESERVED_SIZE: usize =
     std::mem::size_of::<Elf64_Ehdr>() + std::mem::size_of::<Elf64_Phdr>() * 3;
 
 impl OutputFileLayout {
-    fn new(sects: &OutputSectionList, shstrtab_len: usize) -> Self {
+    fn new(
+        sects: &OutputSectionList,
+        dynsym_len: usize,
+        dynstr_len: usize,
+        hash_len: usize,
+        shstrtab_len: usize,
+    ) -> Self {
         let text = OUTPUT_ELF_HEADER_RESERVED_SIZE;
         let rodata = (text + sects.text.bytes_len()).next_multiple_of(PAGE_SIZE);
         let data = (rodata + sects.rodata.bytes_len()).next_multiple_of(PAGE_SIZE);
         // .bss has no bytes in ELF file
-        let shstrtab = data + sects.data.bytes_len();
+        let dynsym = data + sects.data.bytes_len();
+        let dynstr = dynsym + dynsym_len;
+        let hash = dynstr + dynstr_len;
+        let shstrtab = hash + hash_len;
         let shdrs = shstrtab + shstrtab_len;
 
         Self {
             text,
             rodata,
             data,
+            dynsym,
+            dynstr,
+            hash,
             shstrtab,
             shdrs,
         }
@@ -73,11 +90,32 @@ impl OutputFileLayout {
 }
 
 impl<'a> Linker<'a> {
-    pub(super) fn output_elf(&self, sects: OutputSectionList) -> Result<Vec<u8>, LinkerError> {
+    pub(super) fn output_elf(
+        &self,
+        sects: OutputSectionList,
+        dyn_syms: &HashMap<String, ResolvedDynSym>,
+    ) -> Result<Vec<u8>, LinkerError> {
         let entry = self.find_entry_point(&sects)?;
 
-        let shstrtab = Shstrtab::new();
-        let layout = OutputFileLayout::new(&sects, shstrtab.bytes.len());
+        let shstrtab = Strtab::new(vec![
+            ".text",
+            ".rodata",
+            ".data",
+            ".bss",
+            ".dynsym",
+            ".dynstr",
+            ".hash",
+            ".shstrtab",
+        ]);
+
+        let (dynsym, dynstr, hash) = self.generate_dynsyms(dyn_syms);
+        let layout = OutputFileLayout::new(
+            &sects,
+            dynsym.len() * std::mem::size_of::<Elf64_Sym>(),
+            dynstr.bytes.len(),
+            hash.bytes_len(),
+            shstrtab.bytes.len(),
+        );
 
         let phdrs = self.generate_phdrs(&sects, &layout);
         let shdrs = self.generate_shdrs(&sects, &shstrtab, &layout);
@@ -98,6 +136,13 @@ impl<'a> Linker<'a> {
         write_section_bytes(&mut out, layout.rodata, &sects.rodata);
         write_section_bytes(&mut out, layout.data, &sects.data);
         // .bss has no bytes in ELF file.
+        let mut off = layout.dynsym;
+        for sym in &dynsym {
+            out[off..off + std::mem::size_of::<Elf64_Sym>()].copy_from_slice(sym.as_bytes());
+            off += std::mem::size_of::<Elf64_Sym>();
+        }
+        out[layout.dynstr..layout.dynstr + dynstr.bytes.len()].copy_from_slice(&dynstr.bytes);
+        out[layout.hash..layout.hash + hash.bytes_len()].copy_from_slice(&hash.as_bytes());
         out[layout.shstrtab..layout.shstrtab + shstrtab.bytes.len()]
             .copy_from_slice(&shstrtab.bytes);
 
@@ -219,7 +264,7 @@ impl<'a> Linker<'a> {
     fn generate_shdrs(
         &self,
         sects: &OutputSectionList,
-        shstrtab: &Shstrtab,
+        shstrtab: &Strtab,
         layout: &OutputFileLayout,
     ) -> Vec<Elf64_Shdr> {
         let null = Elf64_Shdr {
@@ -301,6 +346,56 @@ impl<'a> Linker<'a> {
         // shstrtab is placed at the last of sections.
         vec![null, text, rodata, data, bss, shstrtab_shdr]
     }
+
+    fn generate_dynsyms(
+        &self,
+        dyn_syms: &'a HashMap<String, ResolvedDynSym>,
+    ) -> (Vec<Elf64_Sym>, Strtab<'a>, DynsymHashTable) {
+        let dynstr = Strtab::new(dyn_syms.keys().map(|name| name.as_str()).collect());
+
+        // simplified implementaion.
+        // this linker does not output .so,
+        // so no one want to search symbols fast.
+        let n = dyn_syms.len() as u32 + 1;
+        let hash = DynsymHashTable {
+            nbucket: 1,
+            nchain: n,
+            bucket: vec![if dyn_syms.is_empty() { 0 } else { 1 }],
+            chain: (0..n)
+                .map(|i| if i == 0 { 0 } else { (i + 1) % n })
+                .collect(),
+        };
+
+        (
+            dyn_syms
+                .iter()
+                .map(|(name, sym)| {
+                    let st_type = ELF64_ST_TYPE(
+                        self.shared_objs[sym.shared_obj_index].symtab.syms[sym.sym_index]
+                            .sym
+                            .st_info,
+                    );
+                    Elf64_Sym {
+                        st_name: dynstr.offset_of(name.as_str()),
+                        st_info: ELF64_ST_INFO(STB_GLOBAL, st_type),
+                        st_other: STV_DEFAULT,
+                        st_shndx: SHN_UNDEF,
+                        st_value: 0,
+                        st_size: 0,
+                    }
+                })
+                .collect(),
+            dynstr,
+            hash,
+        )
+    }
+}
+
+struct DynsymHashTable {
+    nbucket: u32,
+    nchain: u32,
+    bucket: Vec<u32>,
+    chain: Vec<u32>,
 }
 
 fn write_section_bytes(out: &mut [u8], offset: usize, sect: &OutputSection) {
@@ -339,5 +434,45 @@ impl Elf64_Shdr {
                 std::mem::size_of::<Self>(),
             )
         }
+    }
+}
+
+impl Elf64_Sym {
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self as *const Self as *const u8,
+                std::mem::size_of::<Self>(),
+            )
+        }
+    }
+}
+
+impl DynsymHashTable {
+    fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = vec![0; self.bytes_len()];
+
+        bytes[0..4].copy_from_slice(&self.nbucket.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.nchain.to_le_bytes());
+        bytes[8..8 + self.nbucket as usize * 4].copy_from_slice(
+            &self
+                .bucket
+                .iter()
+                .flat_map(|b| b.to_le_bytes())
+                .collect::<Vec<_>>(),
+        );
+        bytes[8 + self.nbucket as usize * 4..].copy_from_slice(
+            &self
+                .chain
+                .iter()
+                .flat_map(|b| b.to_le_bytes())
+                .collect::<Vec<_>>(),
+        );
+
+        bytes
+    }
+
+    fn bytes_len(&self) -> usize {
+        8 + (self.nbucket + self.nchain) as usize * 4
     }
 }

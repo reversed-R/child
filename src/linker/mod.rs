@@ -136,6 +136,6 @@ impl<'a> Linker<'a> {
 
         self.relocate(&mut sects)?;
 
-        self.output_elf(sects)
+        self.output_elf(sects, &dyn_syms)
     }
 }
