@@ -2,16 +2,16 @@ use std::collections::HashMap;
 
 use crate::{
     elf::elf64::{
-        ELF64_R_INFO, ELF64_ST_INFO, ELF64_ST_TYPE, ELFCLASS64, ELFDATA2LSB, ELFMAG0, ELFMAG1,
-        ELFMAG2, ELFMAG3, ELFOSABI_LINUX, EM_X86_64, ET_EXEC, EV_CURRENT, Elf64_Addr, Elf64_Ehdr,
-        Elf64_Half, Elf64_Off, Elf64_Phdr, Elf64_Rela, Elf64_Shdr, Elf64_Sym, Elf64_Word,
-        Elf64_Xword, PF_R, PF_W, PF_X, PT_LOAD, R_X86_64_JUMP_SLOT, SHF_ALLOC, SHF_EXECINSTR,
-        SHF_WRITE, SHN_UNDEF, SHT_DYNSYM, SHT_HASH, SHT_NOBITS, SHT_NULL, SHT_PROGBITS, SHT_RELA,
-        SHT_STRTAB, STB_GLOBAL, STV_DEFAULT,
+        ELF64_R_INFO, ELFCLASS64, ELFDATA2LSB, ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3, ELFOSABI_LINUX,
+        EM_X86_64, ET_EXEC, EV_CURRENT, Elf64_Addr, Elf64_Dyn, Elf64_Ehdr, Elf64_Half, Elf64_Off,
+        Elf64_Phdr, Elf64_Rela, Elf64_Shdr, Elf64_Sym, Elf64_Word, Elf64_Xword, PF_R, PF_W, PF_X,
+        PT_DYNAMIC, PT_INTERP, PT_LOAD, R_X86_64_JUMP_SLOT, SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE,
+        SHT_DYNAMIC, SHT_DYNSYM, SHT_HASH, SHT_NOBITS, SHT_NULL, SHT_PROGBITS, SHT_RELA,
+        SHT_STRTAB,
     },
     linker::{
         Linker, LinkerError,
-        dynamic::GOT_ENTRY_BYTE_SIZE,
+        dynamic::{DYNAMIC_FIXED_ENTRY_COUNT, DynsymHashTable, GOT_ENTRY_BYTE_SIZE},
         section::{
             OutputSection, OutputSectionBytesKind, OutputSectionList, PAGE_SIZE, TEXT_BASE_ADDR,
         },
@@ -20,60 +20,69 @@ use crate::{
 };
 
 // .shstrtab, .dynstr の中身と、名前からその中でのオフセットを引くためのテーブル
-struct Strtab<'a> {
-    bytes: Vec<u8>,
-    offsets: HashMap<&'a str, Elf64_Word>,
+pub(super) struct Strtab {
+    pub(super) bytes: Vec<u8>,
+    offsets: HashMap<String, Elf64_Word>,
 }
 
-impl<'a> Strtab<'a> {
-    fn new(strs: Vec<&'a str>) -> Self {
+impl Strtab {
+    pub(super) fn new(strs: Vec<String>) -> Self {
         let mut bytes = vec![0u8]; // the 0 at offset = 0 is for NULL section
         let mut offsets = HashMap::new();
 
         for name in strs.into_iter() {
-            offsets.insert(name, bytes.len() as Elf64_Word);
-            bytes.extend_from_slice(name.as_bytes());
-            bytes.push(0);
+            offsets.entry(name.clone()).or_insert_with(|| {
+                let off = bytes.len() as Elf64_Word;
+                bytes.extend_from_slice(name.as_bytes());
+                bytes.push(0);
+                off
+            });
         }
 
         Self { bytes, offsets }
     }
 
-    fn offset_of(&self, name: &str) -> Elf64_Word {
+    pub(super) fn offset_of(&self, name: &str) -> Elf64_Word {
         self.offsets[name]
     }
 }
 
-struct OutputFileLayout {
-    text: usize,
-    plt: usize,
-    rodata: usize,
-    data: usize,
-    dynsym: usize,
-    dynstr: usize,
-    hash: usize,
-    rela_plt: usize,
-    shstrtab: usize,
-    shdrs: usize,
+pub(super) struct OutputFileLayout {
+    pub(super) text: usize,
+    pub(super) plt: usize,
+    pub(super) rodata: usize,
+    pub(super) interp: usize,
+    pub(super) dynsym: usize,
+    pub(super) dynstr: usize,
+    pub(super) hash: usize,
+    pub(super) rela_plt: usize,
+    pub(super) dynamic: usize,
+    pub(super) data: usize,
+    pub(super) shstrtab: usize,
+    pub(super) shdrs: usize,
 
-    dynsym_len: usize,
-    dynstr_len: usize,
-    hash_len: usize,
-    rela_plt_len: usize,
+    pub(super) interp_len: usize,
+    pub(super) dynsym_len: usize,
+    pub(super) dynstr_len: usize,
+    pub(super) hash_len: usize,
+    pub(super) rela_plt_len: usize,
+    pub(super) dynamic_len: usize,
 }
 
 // reserved size of Ehdr and Phdrs
-// 3 means segments for text, rodata, data+bss
+// 5 means: PT_LOAD(text) + PT_LOAD(rodata) + PT_LOAD(data) + PT_INTERP + PT_DYNAMIC
 pub(super) const OUTPUT_ELF_HEADER_RESERVED_SIZE: usize =
-    std::mem::size_of::<Elf64_Ehdr>() + std::mem::size_of::<Elf64_Phdr>() * 3;
+    std::mem::size_of::<Elf64_Ehdr>() + std::mem::size_of::<Elf64_Phdr>() * 5;
 
 impl OutputFileLayout {
     fn new(
         sects: &OutputSectionList,
+        interp_len: usize,
         dynsym_len: usize,
         dynstr_len: usize,
         hash_len: usize,
         rela_plt_len: usize,
+        dynamic_len: usize,
         shstrtab_len: usize,
     ) -> Self {
         // segments loaded on memory in execution time:
@@ -82,35 +91,50 @@ impl OutputFileLayout {
         let plt = text + sects.text.bytes_len();
         // R--
         let rodata = (plt + sects.plt.bytes_len()).next_multiple_of(PAGE_SIZE);
-        // RW-
-        let data = (rodata + sects.rodata.bytes_len()).next_multiple_of(PAGE_SIZE);
-        // .bss and .got has no bytes in ELF file
-
-        // only in ELF file:
-        let dynsym = data + sects.data.bytes_len();
+        let interp = rodata + sects.rodata.bytes_len();
+        let dynsym = interp + interp_len;
         let dynstr = dynsym + dynsym_len;
         let hash = dynstr + dynstr_len;
         let rela_plt = hash + hash_len;
-        let shstrtab = rela_plt + rela_plt_len;
+        let dynamic = rela_plt + rela_plt_len;
+        // RW-
+        let data = (dynamic + dynamic_len).next_multiple_of(PAGE_SIZE);
+        // .bss and .got has no bytes in ELF file
+
+        // only in ELF file (not loaded):
+        let shstrtab = data + sects.data.bytes_len();
         let shdrs = shstrtab + shstrtab_len;
 
         Self {
             text,
             plt,
             rodata,
-            data,
+            interp,
             dynsym,
             dynstr,
             hash,
             rela_plt,
+            dynamic,
+            data,
             shstrtab,
             shdrs,
 
+            interp_len,
             dynsym_len,
             dynstr_len,
             hash_len,
             rela_plt_len,
+            dynamic_len,
         }
+    }
+
+    // convert output ELF file offset to R-- segment virtual address.
+    pub(super) fn addr_in_rodata_segment(
+        &self,
+        sects: &OutputSectionList,
+        file_offset: usize,
+    ) -> usize {
+        sects.rodata.base + (file_offset - self.rodata)
     }
 }
 
@@ -119,37 +143,46 @@ impl<'a> Linker<'a> {
         &self,
         sects: OutputSectionList,
         dyn_syms: &HashMap<String, ResolvedDynSym>,
+        interp: Vec<u8>,
+        dynstr: Strtab,
+        dynsym: Vec<Elf64_Sym>,
+        hash: DynsymHashTable,
     ) -> Result<Vec<u8>, LinkerError> {
         let entry = self.find_entry_point(&sects)?;
 
         let shstrtab = Strtab::new(vec![
-            ".text",
-            ".plt",
-            ".rodata",
-            ".data",
-            ".bss",
-            ".got",
-            ".dynsym",
-            ".dynstr",
-            ".hash",
-            ".rela.plt",
-            ".shstrtab",
+            ".text".into(),
+            ".plt".into(),
+            ".rodata".into(),
+            ".interp".into(),
+            ".dynsym".into(),
+            ".dynstr".into(),
+            ".hash".into(),
+            ".rela.plt".into(),
+            ".dynamic".into(),
+            ".data".into(),
+            ".bss".into(),
+            ".got".into(),
+            ".shstrtab".into(),
         ]);
 
-        let (dynsym, dynstr, hash) = self.generate_dynsyms(dyn_syms);
+        let rela_plt = self.generate_rela_plt(&sects, dyn_syms.len());
+
         let layout = OutputFileLayout::new(
             &sects,
-            dynsym.len() * std::mem::size_of::<Elf64_Sym>(), // at 0 is NULL entry
+            interp.len(),
+            dynsym.len() * std::mem::size_of::<Elf64_Sym>(),
             dynstr.bytes.len(),
             hash.bytes_len(),
-            dyn_syms.len() * std::mem::size_of::<Elf64_Rela>(),
+            rela_plt.len() * std::mem::size_of::<Elf64_Rela>(),
+            (self.shared_objs.len() + DYNAMIC_FIXED_ENTRY_COUNT) * std::mem::size_of::<Elf64_Dyn>(),
             shstrtab.bytes.len(),
         );
 
         let phdrs = self.generate_phdrs(&sects, &layout);
         let shdrs = self.generate_shdrs(&sects, &shstrtab, &layout);
         let ehdr = self.generate_ehdr(entry, &phdrs, &shdrs, &layout);
-        let rela_plt = self.generate_rela_plt(&sects, dyn_syms.len());
+        let dynamic = self.generate_dynamic(&sects, &layout, &dynstr);
 
         /* -- write bytes to `out` (ELF file) -- */
         let mut out = vec![0u8; layout.shdrs + shdrs.len() * std::mem::size_of::<Elf64_Shdr>()];
@@ -165,8 +198,9 @@ impl<'a> Linker<'a> {
         write_section_bytes(&mut out, layout.text, &sects.text);
         write_section_bytes(&mut out, layout.plt, &sects.plt);
         write_section_bytes(&mut out, layout.rodata, &sects.rodata);
-        write_section_bytes(&mut out, layout.data, &sects.data);
-        // .bss has no bytes in ELF file.
+
+        out[layout.interp..layout.interp + interp.len()].copy_from_slice(&interp);
+
         let mut off = layout.dynsym;
         for sym in &dynsym {
             out[off..off + std::mem::size_of::<Elf64_Sym>()].copy_from_slice(sym.as_bytes());
@@ -181,6 +215,15 @@ impl<'a> Linker<'a> {
             off += std::mem::size_of::<Elf64_Rela>();
         }
 
+        let mut off = layout.dynamic;
+        for d in &dynamic {
+            out[off..off + std::mem::size_of::<Elf64_Dyn>()].copy_from_slice(d.as_bytes());
+            off += std::mem::size_of::<Elf64_Dyn>();
+        }
+
+        write_section_bytes(&mut out, layout.data, &sects.data);
+        // .bss and .got have no bytes in ELF file.
+
         out[layout.shstrtab..layout.shstrtab + shstrtab.bytes.len()]
             .copy_from_slice(&shstrtab.bytes);
 
@@ -193,19 +236,15 @@ impl<'a> Linker<'a> {
         Ok(out)
     }
 
-    /// "_start" があればそれを、なければ "main" をエントリポイントとして使う。
-    /// TODO: crt0/_start の生成に対応したら "main" へのフォールバックは無くす
     fn find_entry_point(&self, sects: &OutputSectionList) -> Result<usize, LinkerError> {
-        for name in ["_start", "main"] {
-            for (obj_index, obj) in self.objs.iter().enumerate() {
-                if let Some(sym_index) = obj
-                    .symtab
-                    .syms
-                    .iter()
-                    .position(|s| s.name == name && s.sym.is_resolved_index())
-                {
-                    return self.symbol_address(obj_index, sym_index, sects);
-                }
+        for (obj_index, obj) in self.objs.iter().enumerate() {
+            if let Some(sym_index) = obj
+                .symtab
+                .syms
+                .iter()
+                .position(|s| s.name == "_start" && s.sym.is_resolved_index())
+            {
+                return self.symbol_address(obj_index, sym_index, sects);
             }
         }
 
@@ -272,15 +311,17 @@ impl<'a> Linker<'a> {
             p_memsz: (layout.text + sects.text.bytes_len() + sects.plt.bytes_len()) as Elf64_Xword,
             p_align: PAGE_SIZE as Elf64_Xword,
         };
-        // .rodata
+        // .rodata + .interp + .dynsym + .dynstr + .hash + .rela.plt + .dynamic
+        // metadata used by dynamic linker also are included in this segment.
+        let rodata_end = layout.dynamic + layout.dynamic_len;
         let rodata = Elf64_Phdr {
             p_type: PT_LOAD,
             p_flags: PF_R,
             p_offset: layout.rodata as Elf64_Off,
             p_vaddr: sects.rodata.base as Elf64_Addr,
             p_paddr: sects.rodata.base as Elf64_Addr,
-            p_filesz: sects.rodata.bytes_len() as Elf64_Xword,
-            p_memsz: sects.rodata.bytes_len() as Elf64_Xword,
+            p_filesz: (rodata_end - layout.rodata) as Elf64_Xword,
+            p_memsz: (rodata_end - layout.rodata) as Elf64_Xword,
             p_align: PAGE_SIZE as Elf64_Xword,
         };
         // .data + .bss + .got
@@ -299,7 +340,31 @@ impl<'a> Linker<'a> {
             p_align: PAGE_SIZE as Elf64_Xword,
         };
 
-        vec![text, rodata, data]
+        let interp_addr = layout.addr_in_rodata_segment(sects, layout.interp);
+        let interp = Elf64_Phdr {
+            p_type: PT_INTERP,
+            p_flags: PF_R,
+            p_offset: layout.interp as Elf64_Off,
+            p_vaddr: interp_addr as Elf64_Addr,
+            p_paddr: interp_addr as Elf64_Addr,
+            p_filesz: layout.interp_len as Elf64_Xword,
+            p_memsz: layout.interp_len as Elf64_Xword,
+            p_align: 1,
+        };
+
+        let dynamic_addr = layout.addr_in_rodata_segment(sects, layout.dynamic);
+        let dynamic = Elf64_Phdr {
+            p_type: PT_DYNAMIC,
+            p_flags: PF_R,
+            p_offset: layout.dynamic as Elf64_Off,
+            p_vaddr: dynamic_addr as Elf64_Addr,
+            p_paddr: dynamic_addr as Elf64_Addr,
+            p_filesz: layout.dynamic_len as Elf64_Xword,
+            p_memsz: layout.dynamic_len as Elf64_Xword,
+            p_align: 8,
+        };
+
+        vec![text, rodata, data, interp, dynamic]
     }
 
     fn generate_shdrs(
@@ -356,6 +421,78 @@ impl<'a> Linker<'a> {
             sh_addralign: 1,
             sh_entsize: 0,
         };
+        let interp = Elf64_Shdr {
+            sh_name: shstrtab.offset_of(".interp"),
+            sh_type: SHT_PROGBITS,
+            sh_flags: SHF_ALLOC,
+            sh_addr: layout.addr_in_rodata_segment(sects, layout.interp) as Elf64_Addr,
+            sh_offset: layout.interp as Elf64_Off,
+            sh_size: layout.interp_len as Elf64_Xword,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 1,
+            sh_entsize: 0,
+        };
+        let dynsym = Elf64_Shdr {
+            sh_name: shstrtab.offset_of(".dynsym"),
+            sh_type: SHT_DYNSYM,
+            sh_flags: SHF_ALLOC,
+            sh_addr: layout.addr_in_rodata_segment(sects, layout.dynsym) as Elf64_Addr,
+            sh_offset: layout.dynsym as Elf64_Off,
+            sh_size: layout.dynsym_len as Elf64_Xword,
+            sh_link: 6, // section index of .dynstr
+            sh_info: 0,
+            sh_addralign: 8,
+            sh_entsize: std::mem::size_of::<Elf64_Sym>() as Elf64_Xword,
+        };
+        let dynstr = Elf64_Shdr {
+            sh_name: shstrtab.offset_of(".dynstr"),
+            sh_type: SHT_STRTAB,
+            sh_flags: SHF_ALLOC,
+            sh_addr: layout.addr_in_rodata_segment(sects, layout.dynstr) as Elf64_Addr,
+            sh_offset: layout.dynstr as Elf64_Off,
+            sh_size: layout.dynstr_len as Elf64_Xword,
+            sh_link: 0,
+            sh_info: 0,
+            sh_addralign: 1,
+            sh_entsize: 0,
+        };
+        let hash = Elf64_Shdr {
+            sh_name: shstrtab.offset_of(".hash"),
+            sh_type: SHT_HASH,
+            sh_flags: SHF_ALLOC,
+            sh_addr: layout.addr_in_rodata_segment(sects, layout.hash) as Elf64_Addr,
+            sh_offset: layout.hash as Elf64_Off,
+            sh_size: layout.hash_len as Elf64_Xword,
+            sh_link: 5, // section index of .dynsym
+            sh_info: 0,
+            sh_addralign: 4,
+            sh_entsize: 0,
+        };
+        let rela_plt = Elf64_Shdr {
+            sh_name: shstrtab.offset_of(".rela.plt"),
+            sh_type: SHT_RELA,
+            sh_flags: SHF_ALLOC,
+            sh_addr: layout.addr_in_rodata_segment(sects, layout.rela_plt) as Elf64_Addr,
+            sh_offset: layout.rela_plt as Elf64_Off,
+            sh_size: layout.rela_plt_len as Elf64_Xword,
+            sh_link: 5, // section index of .dynsym
+            sh_info: 2, // section index of .plt
+            sh_addralign: 8,
+            sh_entsize: std::mem::size_of::<Elf64_Rela>() as Elf64_Xword,
+        };
+        let dynamic = Elf64_Shdr {
+            sh_name: shstrtab.offset_of(".dynamic"),
+            sh_type: SHT_DYNAMIC,
+            sh_flags: SHF_ALLOC | SHF_WRITE,
+            sh_addr: layout.addr_in_rodata_segment(sects, layout.dynamic) as Elf64_Addr,
+            sh_offset: layout.dynamic as Elf64_Off,
+            sh_size: layout.dynamic_len as Elf64_Xword,
+            sh_link: 6, // section index of .dynstr
+            sh_info: 0,
+            sh_addralign: 8,
+            sh_entsize: std::mem::size_of::<Elf64_Dyn>() as Elf64_Xword,
+        };
         let data = Elf64_Shdr {
             sh_name: shstrtab.offset_of(".data"),
             sh_type: SHT_PROGBITS,
@@ -393,55 +530,7 @@ impl<'a> Linker<'a> {
             sh_size: sects.got.bytes_len() as Elf64_Xword,
             sh_link: 0,
             sh_info: 0,
-            sh_addralign: 1,
-            sh_entsize: 0,
-        };
-        let dynsym = Elf64_Shdr {
-            sh_name: shstrtab.offset_of(".dynsym"),
-            sh_type: SHT_DYNSYM,
-            sh_flags: 0,
-            sh_addr: 0,
-            sh_offset: layout.dynsym as Elf64_Off,
-            sh_size: layout.dynsym_len as Elf64_Xword,
-            sh_link: 0,
-            sh_info: 0,
-            sh_addralign: 1,
-            sh_entsize: 0,
-        };
-        let dynstr = Elf64_Shdr {
-            sh_name: shstrtab.offset_of(".dynstr"),
-            sh_type: SHT_STRTAB,
-            sh_flags: 0,
-            sh_addr: 0,
-            sh_offset: layout.dynstr as Elf64_Off,
-            sh_size: layout.dynstr_len as Elf64_Xword,
-            sh_link: 0,
-            sh_info: 0,
-            sh_addralign: 1,
-            sh_entsize: 0,
-        };
-        let hash = Elf64_Shdr {
-            sh_name: shstrtab.offset_of(".hash"),
-            sh_type: SHT_HASH,
-            sh_flags: 0,
-            sh_addr: 0,
-            sh_offset: layout.hash as Elf64_Off,
-            sh_size: layout.hash_len as Elf64_Xword,
-            sh_link: 0,
-            sh_info: 0,
-            sh_addralign: 1,
-            sh_entsize: 0,
-        };
-        let rela_plt = Elf64_Shdr {
-            sh_name: shstrtab.offset_of(".rela.plt"),
-            sh_type: SHT_RELA,
-            sh_flags: 0,
-            sh_addr: 0,
-            sh_offset: layout.rela_plt as Elf64_Off,
-            sh_size: layout.rela_plt_len as Elf64_Xword,
-            sh_link: 0,
-            sh_info: 0,
-            sh_addralign: 1,
+            sh_addralign: 8,
             sh_entsize: 0,
         };
         let shstrtab_shdr = Elf64_Shdr {
@@ -464,13 +553,15 @@ impl<'a> Linker<'a> {
             text,
             plt,
             rodata,
-            data,
-            bss,
-            got,
+            interp,
             dynsym,
             dynstr,
             hash,
             rela_plt,
+            dynamic,
+            data,
+            bss,
+            got,
             shstrtab_shdr,
         ]
     }
@@ -484,71 +575,6 @@ impl<'a> Linker<'a> {
             })
             .collect()
     }
-
-    fn generate_dynsyms(
-        &self,
-        dyn_syms: &'a HashMap<String, ResolvedDynSym>,
-    ) -> (Vec<Elf64_Sym>, Strtab<'a>, DynsymHashTable) {
-        let dynstr = Strtab::new(dyn_syms.keys().map(|name| name.as_str()).collect());
-
-        // simplified implementaion.
-        // this linker does not output .so,
-        // so no one want to search symbols fast.
-        let n = dyn_syms.len() as u32 + 1;
-        let hash = DynsymHashTable {
-            nbucket: 1,
-            nchain: n,
-            bucket: vec![if dyn_syms.is_empty() { 0 } else { 1 }],
-            chain: (0..n)
-                .map(|i| if i == 0 { 0 } else { (i + 1) % n })
-                .collect(),
-        };
-
-        let mut dyn_syms_vec = dyn_syms.iter().collect::<Vec<_>>();
-        dyn_syms_vec.sort_by_key(|(_, sym)| sym.dyn_index);
-
-        (
-            [
-                // NULL entry
-                vec![Elf64_Sym {
-                    st_name: 0,
-                    st_info: 0,
-                    st_other: 0,
-                    st_shndx: 0,
-                    st_value: 0,
-                    st_size: 0,
-                }],
-                dyn_syms_vec
-                    .iter()
-                    .map(|(name, sym)| {
-                        let st_type = ELF64_ST_TYPE(
-                            self.shared_objs[sym.shared_obj_index].symtab.syms[sym.sym_index]
-                                .sym
-                                .st_info,
-                        );
-                        Elf64_Sym {
-                            st_name: dynstr.offset_of(name.as_str()),
-                            st_info: ELF64_ST_INFO(STB_GLOBAL, st_type),
-                            st_other: STV_DEFAULT,
-                            st_shndx: SHN_UNDEF,
-                            st_value: 0,
-                            st_size: 0,
-                        }
-                    })
-                    .collect(),
-            ]
-            .concat(),
-            dynstr,
-            hash,
-        )
-    }
-}
-
-struct DynsymHashTable {
-    nbucket: u32,
-    nchain: u32,
-    bucket: Vec<u32>,
-    chain: Vec<u32>,
 }
 
 fn write_section_bytes(out: &mut [u8], offset: usize, sect: &OutputSection) {
@@ -609,34 +635,5 @@ impl Elf64_Rela {
                 std::mem::size_of::<Self>(),
             )
         }
-    }
-}
-
-impl DynsymHashTable {
-    fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = vec![0; self.bytes_len()];
-
-        bytes[0..4].copy_from_slice(&self.nbucket.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.nchain.to_le_bytes());
-        bytes[8..8 + self.nbucket as usize * 4].copy_from_slice(
-            &self
-                .bucket
-                .iter()
-                .flat_map(|b| b.to_le_bytes())
-                .collect::<Vec<_>>(),
-        );
-        bytes[8 + self.nbucket as usize * 4..].copy_from_slice(
-            &self
-                .chain
-                .iter()
-                .flat_map(|b| b.to_le_bytes())
-                .collect::<Vec<_>>(),
-        );
-
-        bytes
-    }
-
-    fn bytes_len(&self) -> usize {
-        8 + (self.nbucket + self.nchain) as usize * 4
     }
 }

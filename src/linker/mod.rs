@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    elf::elf64::{DT_SONAME, Elf64_Word},
-    linker::symbol::ResolvedSym,
+    elf::elf64::{DT_SONAME, Elf64_Dyn, Elf64_Rela, Elf64_Sym, Elf64_Word},
+    linker::{dynamic::DYNAMIC_FIXED_ENTRY_COUNT, output::Strtab, symbol::ResolvedSym},
     parser::{
         Elf64Parser, ElfParseError,
         section::{
@@ -24,6 +24,7 @@ pub(crate) struct Linker<'a> {
     objs: Vec<ElfObject<'a>>,
     shared_objs: Vec<ElfSharedObject<'a>>,
     resolved_syms: Vec<HashMap<usize, ResolvedSym>>,
+    dyn_linker: Option<String>,
 }
 
 #[derive(Debug)]
@@ -42,6 +43,7 @@ pub(crate) enum LinkerError {
         name: String,
     },
     EntryPointNotFound,
+    DynamicLinkerPathRequired,
 }
 
 struct ElfObject<'a> {
@@ -60,6 +62,7 @@ impl<'a> Linker<'a> {
     pub(crate) fn new(
         objs: Vec<(&'a [u8], PathBuf)>,
         shared_objs: Vec<(&'a [u8], PathBuf)>,
+        dyn_linker: Option<String>,
     ) -> Result<Self, LinkerError> {
         let objs = objs
             .into_iter()
@@ -124,6 +127,7 @@ impl<'a> Linker<'a> {
                 objs,
                 shared_objs,
                 resolved_syms: Vec::new(),
+                dyn_linker,
             })
         } else {
             Err(LinkerError::ParseError { errors })
@@ -133,12 +137,22 @@ impl<'a> Linker<'a> {
     pub(crate) fn link(mut self) -> Result<Vec<u8>, LinkerError> {
         let dyn_syms = self.resolve_symbols()?;
 
-        let mut sects = self.merge_and_arrange_sections(&dyn_syms)?;
+        let (interp, dynsym, dynstr, hash) = self.dynamic_metadata(&dyn_syms)?;
+
+        let dyn_metadata_len = interp.len()
+            + dynsym.len() * std::mem::size_of::<Elf64_Sym>()
+            + dynstr.bytes.len()
+            + hash.bytes_len()
+            + dyn_syms.len() * std::mem::size_of::<Elf64_Rela>()
+            + (self.shared_objs.len() + DYNAMIC_FIXED_ENTRY_COUNT)
+                * std::mem::size_of::<Elf64_Dyn>();
+
+        let mut sects = self.merge_and_arrange_sections(&dyn_syms, dyn_metadata_len)?;
 
         self.fill_plt(&mut sects, dyn_syms.len());
 
         self.relocate(&mut sects, &dyn_syms)?;
 
-        self.output_elf(sects, &dyn_syms)
+        self.output_elf(sects, &dyn_syms, interp, dynstr, dynsym, hash)
     }
 }

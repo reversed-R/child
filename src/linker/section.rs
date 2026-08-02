@@ -82,10 +82,11 @@ impl<'a> Linker<'a> {
     pub(super) fn merge_and_arrange_sections(
         &mut self,
         dyn_syms: &HashMap<String, ResolvedDynSym>,
+        dyn_metadata_len: usize,
     ) -> Result<OutputSectionList, LinkerError> {
         let sects = self.merge_sections(dyn_syms.len())?;
 
-        self.arrange_sections(sects, dyn_syms.len())
+        self.arrange_sections(sects, dyn_syms.len(), dyn_metadata_len)
     }
 
     fn merge_sections(&mut self, dyn_syms_len: usize) -> Result<OutputSectionList, LinkerError> {
@@ -202,6 +203,7 @@ impl<'a> Linker<'a> {
         &self,
         mut sects: OutputSectionList,
         dyn_syms_len: usize,
+        dyn_metadata_len: usize,
     ) -> Result<OutputSectionList, LinkerError> {
         // page is devided between segments
         // which have different (Read-Write-Execute) permissions.
@@ -211,10 +213,12 @@ impl<'a> Linker<'a> {
         sects.text.base = TEXT_BASE_ADDR + OUTPUT_ELF_HEADER_RESERVED_SIZE;
         sects.plt.base = sects.text.end_addr();
         // R-- segments
+        // .interp, .dynsym, .dynstr, .hash, .rela.plt and .dynamic
+        // are placed just next of .rodata
         sects.rodata.base =
             (sects.plt.end_addr() + PLT_ENTRY_BYTE_SIZE * dyn_syms_len).next_multiple_of(PAGE_SIZE);
         // RW- segments
-        sects.data.base = sects.rodata.end_addr().next_multiple_of(PAGE_SIZE);
+        sects.data.base = (sects.rodata.end_addr() + dyn_metadata_len).next_multiple_of(PAGE_SIZE);
         sects.bss.base = sects.data.end_addr();
         sects.got.base = sects.bss.end_addr();
 

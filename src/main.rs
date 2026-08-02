@@ -131,6 +131,7 @@ fn main() {
             .iter()
             .map(|(bin, path)| (bin.as_slice(), path.clone()))
             .collect(),
+        dyn_linker,
     )
     .unwrap()
     .link()
