@@ -17,15 +17,43 @@ fn main() {
     let mut shared_obj_names = Vec::new();
     let mut shared_obj_base_paths = Vec::new();
     let mut dyn_linker = None;
+    let mut out_path = None;
 
-    for mut arg in args.into_iter().skip(1) {
+    let mut args = args.into_iter().skip(1);
+    while let Some(mut arg) = args.next() {
         if arg.starts_with("-") {
             if arg.starts_with("-l") {
-                shared_obj_names.push(arg.split_off(2));
+                if arg.len() > 2 {
+                    shared_obj_names.push(arg.split_off(2));
+                } else if let Some(param) = args.next() {
+                    shared_obj_names.push(param);
+                } else {
+                    panic_with_usage_message();
+                }
             } else if arg.starts_with("-L") {
-                shared_obj_base_paths.push(arg.split_off(2));
+                if arg.len() > 2 {
+                    shared_obj_base_paths.push(arg.split_off(2));
+                } else if let Some(param) = args.next() {
+                    shared_obj_base_paths.push(param);
+                } else {
+                    panic_with_usage_message();
+                }
             } else if arg.starts_with("-I") && dyn_linker.is_none() {
-                dyn_linker = Some(arg.split_off(2));
+                if arg.len() > 2 {
+                    dyn_linker = Some(arg.split_off(2));
+                } else if let Some(param) = args.next() {
+                    dyn_linker = Some(param);
+                } else {
+                    panic_with_usage_message();
+                }
+            } else if arg.starts_with("-o") && out_path.is_none() {
+                if arg.len() > 2 {
+                    out_path = Some(arg.split_off(2));
+                } else if let Some(param) = args.next() {
+                    out_path = Some(param);
+                } else {
+                    panic_with_usage_message();
+                }
             } else {
                 panic_with_usage_message();
             }
@@ -108,13 +136,13 @@ fn main() {
     .link()
     .unwrap();
 
-    let out_path = "a.out";
+    let out_path = out_path.unwrap_or("a.out".into());
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true) // overwrite
         .mode(0o755)
-        .open(out_path)
+        .open(&out_path)
         .unwrap_or_else(|e| panic!("Failed to open {out_path}: {e}"));
     file.write_all(&bin)
         .unwrap_or_else(|e| panic!("Failed to write {out_path}: {e}"));
@@ -125,6 +153,7 @@ fn panic_with_usage_message() -> ! {
         r#"Usage: child <object0>.o <object1>.o ...
     -l<shared-object0> -l<shared-object1> ...
     -L/base/path/to/shared/objects ...
-    -I/path/to/dynamic/linker"#
+    -I/path/to/dynamic/linker
+    -o/path/to/output"#
     );
 }
