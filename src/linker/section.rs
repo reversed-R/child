@@ -39,6 +39,38 @@ impl OutputSection {
     }
 }
 
+// for normal section (has bytes)
+//
+// fill bytes with zeros to next alignment position,
+// extend with merging section bytes,
+// and record its offset.
+fn push_bytes(
+    bytes: &mut Vec<u8>,
+    offsets: &mut HashMap<usize, usize>,
+    obj_index: usize,
+    align: usize,
+    content: &[u8],
+) {
+    bytes.resize(bytes.len().next_multiple_of(align), 0);
+
+    offsets.insert(obj_index, bytes.len());
+    bytes.extend_from_slice(content);
+}
+
+// for no bytes section (e.g. .bss)
+fn push_nobits(
+    current_offset: &mut usize,
+    offsets: &mut HashMap<usize, usize>,
+    obj_index: usize,
+    align: usize,
+    len: usize,
+) {
+    *current_offset = current_offset.next_multiple_of(align);
+
+    offsets.insert(obj_index, *current_offset);
+    *current_offset += len;
+}
+
 impl<'a> Linker<'a> {
     pub(super) fn merge_and_arrange_sections(&mut self) -> Result<OutputSectionList, LinkerError> {
         let sects = self.merge_sections()?;
@@ -50,55 +82,68 @@ impl<'a> Linker<'a> {
         let mut text_section_bytes = vec![];
         let mut data_section_bytes = vec![];
         let mut rodata_section_bytes = vec![];
+        let mut bss_current_offset = 0;
 
         let mut text_section_offsets = HashMap::new();
         let mut data_section_offsets = HashMap::new();
         let mut rodata_section_offsets = HashMap::new();
         let mut bss_section_offsets = HashMap::new();
 
-        let mut text_current_offset = 0;
-        let mut data_current_offset = 0;
-        let mut rodata_current_offset = 0;
-        let mut bss_current_offset = 0;
-
         for (obj_index, o) in self.objs.iter().enumerate() {
-            let opt_text = o
+            if let Some((shdr, s_body)) = o
                 .elf
                 .section_text()
-                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?;
-            if let Some((_, s_body)) = opt_text {
-                text_section_offsets.insert(obj_index, text_current_offset);
-                text_section_bytes.extend_from_slice(s_body);
-                text_current_offset += s_body.len();
+                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?
+            {
+                push_bytes(
+                    &mut text_section_bytes,
+                    &mut text_section_offsets,
+                    obj_index,
+                    shdr.hdr.sh_addralign(),
+                    s_body,
+                );
             }
 
-            let opt_data = o
+            if let Some((shdr, s_body)) = o
                 .elf
                 .section_data()
-                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?;
-            if let Some((_, s_body)) = opt_data {
-                data_section_offsets.insert(obj_index, data_current_offset);
-                data_section_bytes.extend_from_slice(s_body);
-                data_current_offset += s_body.len();
+                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?
+            {
+                push_bytes(
+                    &mut data_section_bytes,
+                    &mut data_section_offsets,
+                    obj_index,
+                    shdr.hdr.sh_addralign(),
+                    s_body,
+                );
             }
 
-            let opt_rodata = o
+            if let Some((shdr, s_body)) = o
                 .elf
                 .section_rodata()
-                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?;
-            if let Some((_, s_body)) = opt_rodata {
-                rodata_section_offsets.insert(obj_index, rodata_current_offset);
-                rodata_section_bytes.extend_from_slice(s_body);
-                rodata_current_offset += s_body.len();
+                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?
+            {
+                push_bytes(
+                    &mut rodata_section_bytes,
+                    &mut rodata_section_offsets,
+                    obj_index,
+                    shdr.hdr.sh_addralign(),
+                    s_body,
+                );
             }
 
-            let opt_bss = o
+            if let Some(shdr) = o
                 .elf
                 .section_bss()
-                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?;
-            if let Some(shdr) = opt_bss {
-                bss_section_offsets.insert(obj_index, bss_current_offset);
-                bss_current_offset += shdr.hdr.sh_size as usize;
+                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?
+            {
+                push_nobits(
+                    &mut bss_current_offset,
+                    &mut bss_section_offsets,
+                    obj_index,
+                    shdr.hdr.sh_addralign(),
+                    shdr.hdr.sh_size as usize,
+                );
             }
         }
 

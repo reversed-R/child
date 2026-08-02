@@ -133,6 +133,13 @@ pub struct Elf64_Shdr {
     pub sh_entsize: Elf64_Xword,   /* Entry size if section holds table */
 }
 
+impl Elf64_Shdr {
+    // 0 means no restriction
+    pub fn sh_addralign(&self) -> usize {
+        (self.sh_addralign as usize).max(1)
+    }
+}
+
 /* Special section indices.  */
 
 pub const SHN_UNDEF: Elf64_Section = 0; /* Undefined section */
