@@ -18,6 +18,7 @@ pub(crate) struct ResolvedSym {
 
 pub(super) struct ResolvedDynSym {
     pub(super) shared_obj_index: usize,
+    pub(super) dyn_index: usize,
     pub(super) sym_index: usize,
 }
 
@@ -73,13 +74,14 @@ impl<'a> Linker<'a> {
                                                 obj_index: ResolvedObjIndexKind::Shared(o_index),
                                                 sym_index: s_index,
                                             });
-                                            dyn_syms.insert(
-                                                s.name.clone(),
+                                            let dyn_index = dyn_syms.len();
+                                            dyn_syms.entry(s.name.clone()).or_insert_with(|| {
                                                 ResolvedDynSym {
                                                     shared_obj_index: o_index,
+                                                    dyn_index,
                                                     sym_index: s_index,
-                                                },
-                                            );
+                                                }
+                                            });
                                             found = true;
                                         }
                                         Entry::Occupied(_) => {

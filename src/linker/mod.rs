@@ -14,6 +14,7 @@ use crate::{
     },
 };
 
+mod dynamic;
 mod output;
 mod relocation;
 mod section;
@@ -132,9 +133,11 @@ impl<'a> Linker<'a> {
     pub(crate) fn link(mut self) -> Result<Vec<u8>, LinkerError> {
         let dyn_syms = self.resolve_symbols()?;
 
-        let mut sects = self.merge_and_arrange_sections()?;
+        let mut sects = self.merge_and_arrange_sections(&dyn_syms)?;
 
-        self.relocate(&mut sects)?;
+        self.fill_plt(&mut sects, dyn_syms.len());
+
+        self.relocate(&mut sects, &dyn_syms)?;
 
         self.output_elf(sects, &dyn_syms)
     }

@@ -1,15 +1,22 @@
 use std::collections::HashMap;
 
-use crate::linker::{Linker, LinkerError, output::OUTPUT_ELF_HEADER_RESERVED_SIZE};
+use crate::linker::{
+    Linker, LinkerError,
+    dynamic::{GOT_ENTRY_BYTE_SIZE, PLT_ENTRY_BYTE_SIZE},
+    output::OUTPUT_ELF_HEADER_RESERVED_SIZE,
+    symbol::ResolvedDynSym,
+};
 
 pub(super) const TEXT_BASE_ADDR: usize = 0x400000;
 pub(super) const PAGE_SIZE: usize = 0x1000;
 
 pub(super) struct OutputSectionList {
     pub(super) text: OutputSection,
+    pub(super) plt: OutputSection,
     pub(super) rodata: OutputSection,
     pub(super) data: OutputSection,
     pub(super) bss: OutputSection,
+    pub(super) got: OutputSection,
 }
 
 pub(super) enum OutputSectionBytesKind {
@@ -72,13 +79,16 @@ fn push_nobits(
 }
 
 impl<'a> Linker<'a> {
-    pub(super) fn merge_and_arrange_sections(&mut self) -> Result<OutputSectionList, LinkerError> {
-        let sects = self.merge_sections()?;
+    pub(super) fn merge_and_arrange_sections(
+        &mut self,
+        dyn_syms: &HashMap<String, ResolvedDynSym>,
+    ) -> Result<OutputSectionList, LinkerError> {
+        let sects = self.merge_sections(dyn_syms.len())?;
 
-        self.arrange_sections(sects)
+        self.arrange_sections(sects, dyn_syms.len())
     }
 
-    fn merge_sections(&mut self) -> Result<OutputSectionList, LinkerError> {
+    fn merge_sections(&mut self, dyn_syms_len: usize) -> Result<OutputSectionList, LinkerError> {
         let mut text_section_bytes = vec![];
         let mut data_section_bytes = vec![];
         let mut rodata_section_bytes = vec![];
@@ -167,18 +177,31 @@ impl<'a> Linker<'a> {
             bytes: OutputSectionBytesKind::NobitsLen(bss_current_offset),
             section_offsets: bss_section_offsets,
         };
+        let plt_section = OutputSection {
+            base: 0,
+            bytes: OutputSectionBytesKind::Bytes(vec![0u8; dyn_syms_len * PLT_ENTRY_BYTE_SIZE]),
+            section_offsets: HashMap::new(),
+        };
+        let got_section = OutputSection {
+            base: 0,
+            bytes: OutputSectionBytesKind::NobitsLen(dyn_syms_len * GOT_ENTRY_BYTE_SIZE),
+            section_offsets: HashMap::new(),
+        };
 
         Ok(OutputSectionList {
             text: text_section,
+            plt: plt_section,
             rodata: rodata_section,
             data: data_section,
             bss: bss_section,
+            got: got_section,
         })
     }
 
     fn arrange_sections(
         &self,
         mut sects: OutputSectionList,
+        dyn_syms_len: usize,
     ) -> Result<OutputSectionList, LinkerError> {
         // page is devided between segments
         // which have different (Read-Write-Execute) permissions.
@@ -186,11 +209,14 @@ impl<'a> Linker<'a> {
         // R-X segments
         // make a gap to load Ehdr and Phdrs
         sects.text.base = TEXT_BASE_ADDR + OUTPUT_ELF_HEADER_RESERVED_SIZE;
+        sects.plt.base = sects.text.end_addr();
         // R-- segments
-        sects.rodata.base = sects.text.end_addr().next_multiple_of(PAGE_SIZE);
+        sects.rodata.base =
+            (sects.plt.end_addr() + PLT_ENTRY_BYTE_SIZE * dyn_syms_len).next_multiple_of(PAGE_SIZE);
         // RW- segments
         sects.data.base = sects.rodata.end_addr().next_multiple_of(PAGE_SIZE);
         sects.bss.base = sects.data.end_addr();
+        sects.got.base = sects.bss.end_addr();
 
         Ok(sects)
     }
