@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::elf::elf64::{
     EI_CLASS, EI_DATA, EI_MAG0, EI_MAG3, EI_VERSION, ELFCLASS64, ELFDATA2LSB, ELFMAG, EM_X86_64,
-    EV_CURRENT, Elf64_Ehdr, Elf64_Shdr,
+    EV_CURRENT, Elf64_Ehdr, Elf64_Shdr, SHT_NOBITS,
 };
 
 pub(crate) mod section;
@@ -126,7 +126,9 @@ impl<'a> Elf64Parser<'a> {
     }
 
     fn get_section_body(&self, shdr: &ElfSectionHeaderEntry) -> Result<&'a [u8], ElfParseError> {
-        if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
+        if shdr.hdr.sh_type == SHT_NOBITS {
+            Ok(&[])
+        } else if self.bin.len() < (shdr.hdr.sh_offset + shdr.hdr.sh_size) as usize {
             Err(ElfParseError::TooShort)
         } else {
             Ok(&self.bin

@@ -124,9 +124,7 @@ impl<'a> Linker<'a> {
     pub(crate) fn link(mut self) -> Result<(), LinkerError> {
         self.resolve_symbols()?;
 
-        let (text_section, data_section) = self.merge_sections()?;
-
-        let sects = self.arrange_sections(text_section, data_section)?;
+        let sects = self.merge_and_arrange_sections()?;
 
         self.relocate(sects)?;
 

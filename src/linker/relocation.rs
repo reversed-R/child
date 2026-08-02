@@ -1,7 +1,9 @@
 use crate::{
     elf::elf64::{R_X86_64_PC32, R_X86_64_PLT32},
     linker::{
-        ElfObject, Linker, LinkerError, section::OutputSectionList, symbol::ResolvedObjIndexKind,
+        ElfObject, Linker, LinkerError,
+        section::{OutputSectionBytesKind, OutputSectionList},
+        symbol::ResolvedObjIndexKind,
     },
     parser::{ElfParseError, section::rela_text::ElfRela},
 };
@@ -57,8 +59,9 @@ impl<'a> Linker<'a> {
                 // A: append
                 let value = (sym_addr as i64 + rela.rela.r_addend - place_addr as i64) as i32;
 
-                sects.text.bytes[place_offset..place_offset + 4]
-                    .copy_from_slice(&value.to_le_bytes());
+                if let OutputSectionBytesKind::Bytes(bytes) = &mut sects.text.bytes {
+                    bytes[place_offset..place_offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
             }
             ResolvedObjIndexKind::Shared(_shared_obj_index) => {
                 // TODO: GOT/PLTスタブを生成できるようになってから実装する。
@@ -96,6 +99,8 @@ impl<'a> Linker<'a> {
         let output_sect = match sect_name {
             ".text" => &sects.text,
             ".data" => &sects.data,
+            ".rodata" => &sects.rodata,
+            ".bss" => &sects.bss,
             other => {
                 return Err(LinkerError::UnsupportedSection {
                     name: other.to_string(),

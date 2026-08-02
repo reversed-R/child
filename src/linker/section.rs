@@ -7,28 +7,59 @@ const PAGE_SIZE: usize = 0x1000;
 
 pub(super) struct OutputSectionList {
     pub(super) text: OutputSection,
+    pub(super) rodata: OutputSection,
     pub(super) data: OutputSection,
+    pub(super) bss: OutputSection,
+}
+
+pub(super) enum OutputSectionBytesKind {
+    Bytes(Vec<u8>),
+    NobitsLen(usize),
 }
 
 pub(super) struct OutputSection {
     pub(super) base: usize,
-    pub(super) bytes: Vec<u8>,
+    pub(super) bytes: OutputSectionBytesKind,
 
     // 複数のオブジェクトファイルにあった元々のセクションのマージ後のオフセット
     // obj_index -> offset
     pub(super) section_offsets: HashMap<usize, usize>,
 }
 
+impl OutputSection {
+    fn bytes_len(&self) -> usize {
+        match &self.bytes {
+            OutputSectionBytesKind::Bytes(bytes) => bytes.len(),
+            OutputSectionBytesKind::NobitsLen(len) => *len,
+        }
+    }
+
+    fn end_addr(&self) -> usize {
+        self.base + self.bytes_len()
+    }
+}
+
 impl<'a> Linker<'a> {
-    pub(super) fn merge_sections(&mut self) -> Result<(OutputSection, OutputSection), LinkerError> {
+    pub(super) fn merge_and_arrange_sections(&mut self) -> Result<OutputSectionList, LinkerError> {
+        let sects = self.merge_sections()?;
+
+        self.arrange_sections(sects)
+    }
+
+    fn merge_sections(&mut self) -> Result<OutputSectionList, LinkerError> {
         let mut text_section_bytes = vec![];
         let mut data_section_bytes = vec![];
+        let mut rodata_section_bytes = vec![];
 
         let mut text_section_offsets = HashMap::new();
         let mut data_section_offsets = HashMap::new();
+        let mut rodata_section_offsets = HashMap::new();
+        let mut bss_section_offsets = HashMap::new();
 
         let mut text_current_offset = 0;
         let mut data_current_offset = 0;
+        let mut rodata_current_offset = 0;
+        let mut bss_current_offset = 0;
 
         for (obj_index, o) in self.objs.iter().enumerate() {
             let opt_text = o
@@ -50,34 +81,73 @@ impl<'a> Linker<'a> {
                 data_section_bytes.extend_from_slice(s_body);
                 data_current_offset += s_body.len();
             }
+
+            let opt_rodata = o
+                .elf
+                .section_rodata()
+                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?;
+            if let Some((_, s_body)) = opt_rodata {
+                rodata_section_offsets.insert(obj_index, rodata_current_offset);
+                rodata_section_bytes.extend_from_slice(s_body);
+                rodata_current_offset += s_body.len();
+            }
+
+            let opt_bss = o
+                .elf
+                .section_bss()
+                .map_err(|e| LinkerError::ParseError { errors: vec![e] })?;
+            if let Some(shdr) = opt_bss {
+                bss_section_offsets.insert(obj_index, bss_current_offset);
+                bss_current_offset += shdr.hdr.sh_size as usize;
+            }
         }
 
         let text_section = OutputSection {
-            base: TEXT_BASE_ADDR,
-            bytes: text_section_bytes,
+            base: 0,
+            bytes: OutputSectionBytesKind::Bytes(text_section_bytes),
             section_offsets: text_section_offsets,
         };
         let data_section = OutputSection {
-            base: (text_section.base + text_section.bytes.len()).next_multiple_of(PAGE_SIZE),
-            bytes: data_section_bytes,
+            base: 0,
+            bytes: OutputSectionBytesKind::Bytes(data_section_bytes),
             section_offsets: data_section_offsets,
         };
-        // .text (R-X) と .data (RW) は本来書き込み権限が違うセグメントに属するべき
-        // ページ境界をまたいで配置しておく
+        let rodata_section = OutputSection {
+            base: 0,
+            bytes: OutputSectionBytesKind::Bytes(rodata_section_bytes),
+            section_offsets: rodata_section_offsets,
+        };
+        let bss_section = OutputSection {
+            base: 0,
+            bytes: OutputSectionBytesKind::NobitsLen(bss_current_offset),
+            section_offsets: bss_section_offsets,
+        };
+
+        Ok(OutputSectionList {
+            text: text_section,
+            rodata: rodata_section,
+            data: data_section,
+            bss: bss_section,
+        })
+    }
+
+    fn arrange_sections(
+        &self,
+        mut sects: OutputSectionList,
+    ) -> Result<OutputSectionList, LinkerError> {
+        // page is devided between segments
+        // which have different (Read-Write-Execute) permissions.
         // TODO:
         // program header の生成
 
-        Ok((text_section, data_section))
-    }
+        // R-X segments
+        sects.text.base = TEXT_BASE_ADDR;
+        // R-- segments
+        sects.rodata.base = sects.text.end_addr().next_multiple_of(PAGE_SIZE);
+        // RW- segments
+        sects.data.base = sects.rodata.end_addr().next_multiple_of(PAGE_SIZE);
+        sects.bss.base = sects.data.end_addr();
 
-    pub(super) fn arrange_sections(
-        &self,
-        text_section: OutputSection,
-        data_section: OutputSection,
-    ) -> Result<OutputSectionList, LinkerError> {
-        Ok(OutputSectionList {
-            text: text_section,
-            data: data_section,
-        })
+        Ok(sects)
     }
 }
