@@ -12,15 +12,23 @@ pub(super) enum ResolvedObjIndexKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ResolvedSym {
-    pub(crate) obj_index: ResolvedObjIndexKind,
-    pub(crate) sym_index: usize,
+    pub(super) obj_index: ResolvedObjIndexKind,
+    pub(super) sym_index: usize,
+}
+
+pub(super) struct ResolvedDynSym {
+    pub(super) shared_obj_index: usize,
+    pub(super) sym_index: usize,
 }
 
 impl<'a> Linker<'a> {
-    pub(super) fn resolve_symbols(&mut self) -> Result<(), LinkerError> {
+    pub(super) fn resolve_symbols(
+        &mut self,
+    ) -> Result<HashMap<String, ResolvedDynSym>, LinkerError> {
         let mut resolved_syms = vec![HashMap::<usize, ResolvedSym>::new(); self.objs.len()];
         let mut duplicated_syms = HashSet::new();
         let mut missing_syms = HashSet::new();
+        let mut dyn_syms = HashMap::new();
 
         for (obj_index, obj) in self.objs.iter().enumerate() {
             for (sym_index, sym) in obj.symtab.syms.iter().enumerate().skip(1) {
@@ -65,6 +73,13 @@ impl<'a> Linker<'a> {
                                                 obj_index: ResolvedObjIndexKind::Shared(o_index),
                                                 sym_index: s_index,
                                             });
+                                            dyn_syms.insert(
+                                                s.name.clone(),
+                                                ResolvedDynSym {
+                                                    shared_obj_index: o_index,
+                                                    sym_index: s_index,
+                                                },
+                                            );
                                             found = true;
                                         }
                                         Entry::Occupied(_) => {
@@ -100,7 +115,7 @@ impl<'a> Linker<'a> {
 
             self.resolved_syms = resolved_syms;
 
-            Ok(())
+            Ok(dyn_syms)
         } else {
             Err(LinkerError::SymbolResolveFailed {
                 duplicated_syms,

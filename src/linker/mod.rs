@@ -4,11 +4,13 @@ use std::{
 };
 
 use crate::{
-    elf::elf64::Elf64_Word,
+    elf::elf64::{DT_SONAME, Elf64_Word},
     linker::symbol::ResolvedSym,
     parser::{
         Elf64Parser, ElfParseError,
-        section::{rela_text::ElfSectionRelaText, symtab::ElfSectionSymtab},
+        section::{
+            dynamic::ElfSectionDynamic, rela_text::ElfSectionRelaText, symtab::ElfSectionSymtab,
+        },
     },
 };
 
@@ -49,6 +51,8 @@ struct ElfObject<'a> {
 struct ElfSharedObject<'a> {
     elf: Elf64Parser<'a>,
     symtab: ElfSectionSymtab,
+    dynamic: ElfSectionDynamic,
+    soname: Option<String>,
 }
 
 impl<'a> Linker<'a> {
@@ -76,8 +80,19 @@ impl<'a> Linker<'a> {
             .map(|(bin, path)| {
                 let elf = Elf64Parser::new(bin, path)?;
                 let (symtab, _) = elf.section_symtab()?;
+                let (dynamic, dyn_strtab) = elf.section_dynamic()?;
+                let soname = dynamic
+                    .dyns
+                    .iter()
+                    .find(|dyn_| dyn_.d_tag == DT_SONAME)
+                    .map(|dyn_| dyn_strtab.get(unsafe { dyn_.d_un.d_val } as usize));
 
-                Ok(ElfSharedObject { elf, symtab })
+                Ok(ElfSharedObject {
+                    elf,
+                    symtab,
+                    dynamic,
+                    soname,
+                })
             })
             .collect::<Vec<Result<_, _>>>();
 
@@ -115,7 +130,7 @@ impl<'a> Linker<'a> {
     }
 
     pub(crate) fn link(mut self) -> Result<Vec<u8>, LinkerError> {
-        self.resolve_symbols()?;
+        let dyn_syms = self.resolve_symbols()?;
 
         let mut sects = self.merge_and_arrange_sections()?;
 
