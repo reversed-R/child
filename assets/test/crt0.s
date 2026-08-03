@@ -20,6 +20,5 @@ _start:
   call main
 
   # exit from process
-  mov rdi, rax           # set exit code with main return value
-  mov rax, 231           # syscall number of exit_group(2)
-  syscall
+  mov edi, eax           # set exit code with main return value
+  call exit
